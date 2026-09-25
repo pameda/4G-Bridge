@@ -13,7 +13,15 @@ from PyObjCTools import AppHelper
 from fourg_bridge.app.runtime import ModemRuntime
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.imessage.runner import AppleScriptRunner
-from fourg_bridge.models import DataState, DeviceState, ModemSnapshot, RelayError, RelayStatus
+from fourg_bridge.imessage.target import InvalidTarget, normalize_target
+from fourg_bridge.models import (
+    DataState,
+    DeviceState,
+    ModemSnapshot,
+    RelayError,
+    RelayResult,
+    RelayStatus,
+)
 from fourg_bridge.modem.usb_discovery import USBDiscovery
 from fourg_bridge.network.traffic import TrafficLedger
 from fourg_bridge.storage.database import RelayDatabase
@@ -39,6 +47,8 @@ class ApplicationController:
         self._traffic_snapshot = None
         self._traffic_usage = TrafficLedger(support / "traffic.sqlite").usage()
         self._recent_relay = None
+        self._bridge_busy = False
+        self._bridge_status = "尚未检查 iMessage；连接检查不会发送消息。"
         self._runtime: ModemRuntime | None = None
         self._runtime_lock = threading.RLock()
         self._menu = MenuBarController.alloc().initWithDelegate_(self)
@@ -299,20 +309,36 @@ class ApplicationController:
             )
         )
 
-    def set_relay_target(self, target: str) -> None:
+    def set_relay_target(self, target: str) -> bool:
         try:
-            self._keychain.set_target(target)
+            self._keychain.set_target(normalize_target(target) if target.strip() else "")
             self._show_alert("已保存", "转发目标已安全存入 macOS 钥匙串。")
+            self._bridge_status = "目标已更新，请先检查连接，再发送测试。"
+            return True
+        except InvalidTarget as error:
+            self._show_alert("目标格式需要调整", str(error))
         except KeychainError:
             self._show_alert("保存失败", "无法写入 macOS 钥匙串。")
+        return False
 
     def relay_queue_summary(self) -> str:
         unknown = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)
         retry = self._database.records_with_status(RelayStatus.RETRY)
         cleanup = self._database.records_with_status(RelayStatus.CLEANUP_PENDING)
-        if not (unknown or retry or cleanup):
-            return "转发队列：正常"
-        lines = [f"等待重试：{len(retry)}  投递不确定：{len(unknown)}  等待清理：{len(cleanup)}"]
+        failed = self._database.records_with_status(RelayStatus.FAILED)
+        if not (unknown or retry or cleanup or failed):
+            return "没有待处理失败；历史成功只表示 Messages 接受请求，不代表对方已收到。"
+        lines = [
+            f"等待重试 {len(retry)} · 投递不确定 {len(unknown)} · "
+            f"清理 {len(cleanup)} · 失败 {len(failed)}"
+        ]
+        if failed or retry:
+            record = (failed or retry)[-1]
+            try:
+                error = RelayError(record.last_error)
+            except ValueError:
+                error = RelayError.SCRIPT_FAILED
+            lines.append(self._relay_error_message(RelayResult(False, error)))
         if unknown:
             record = unknown[0]
             lines.append(
@@ -341,19 +367,68 @@ class ApplicationController:
             self.rescan()
         self._show_alert("已更新清理队列", f"{len(records)} 项不会重发，只会清理模块短信。")
 
+    def bridge_status(self) -> tuple[bool, str]:
+        return self._bridge_busy, self._bridge_status
+
+    def check_messages(self) -> None:
+        self._start_bridge_action(False)
+
     def send_test_message(self) -> None:
-        result = self._bridge.send_test()
-        if result.accepted:
-            self._show_alert("Messages 已接受发送请求", "这不表示对端已经送达。")
+        self._start_bridge_action(True)
+
+    def _start_bridge_action(self, send: bool) -> None:
+        if self._bridge_busy:
             return
+        self._bridge_busy = True
+        self._bridge_status = "正在发送测试…" if send else "正在检查连接（不会发送消息）…"
+        self._settings_window.refresh(False)
+
+        def worker() -> None:
+            try:
+                result = self._bridge.send_test() if send else self._bridge.check()
+            except Exception:
+                result = RelayResult(False, RelayError.SCRIPT_FAILED, delivery_uncertain=send)
+            AppHelper.callAfter(self._bridge_finished, result, send)
+
+        threading.Thread(
+            target=worker, name="Messages-Check" if not send else "Messages-Test", daemon=True
+        ).start()
+
+    def _bridge_finished(self, result: RelayResult, send: bool) -> None:
+        self._bridge_busy = False
+        if result.accepted:
+            self._bridge_status = (
+                "Messages 已接受测试发送请求；请在“信息”中确认是否出现红色发送失败标记。"
+                if send
+                else "连接检查通过；未发送消息，也无法仅凭此检查确定对方已开通 iMessage。"
+            )
+        else:
+            self._bridge_status = self._relay_error_message(result)
+        self._settings_window.refresh(False)
+        self._show_alert("iMessage 测试" if send else "iMessage 连接检查", self._bridge_status)
+
+    @staticmethod
+    def _relay_error_message(result: RelayResult) -> str:
+        if result.delivery_uncertain:
+            return (
+                "发送结果不确定。请先在“信息”中核对，不要连续重发；"
+                "自动转发将保留模块短信并停止重试。"
+            )
         messages = {
             RelayError.AUTOMATION_DENIED: "Automation 权限未授权。请在系统设置中允许控制“信息”。",
             RelayError.IMESSAGE_NOT_CONNECTED: "Messages 未登录或 iMessage 服务未连接。",
             RelayError.TARGET_UNAVAILABLE: "找不到该 iMessage 目标，请检查手机号或 Apple ID。",
             RelayError.MESSAGES_UNAVAILABLE: "Messages.app 不可用。",
             RelayError.SCRIPT_TIMEOUT: "Messages 响应超时。",
+            RelayError.TARGET_INVALID: (
+                "手机号缺少国家区号或格式无效。请使用 +国家区号手机号"
+                "（中国大陆为 +86），或有效的 iMessage 邮箱；保存后重新检查。"
+            ),
+            RelayError.KEYCHAIN_UNAVAILABLE: (
+                "无法读取钥匙串中的转发目标，请解锁钥匙串并重新保存目标。"
+            ),
         }
-        self._show_alert("发送失败", messages.get(result.error, "AppleScript 执行失败。"))
+        return messages.get(result.error, f"AppleScript 执行失败。{result.detail}")
 
     @staticmethod
     def _show_alert(title: str, detail: str) -> None:

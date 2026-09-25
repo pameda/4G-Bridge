@@ -55,6 +55,8 @@ class RelayError(StrEnum):
     TARGET_UNAVAILABLE = "target_unavailable"
     SCRIPT_TIMEOUT = "script_timeout"
     SCRIPT_FAILED = "script_failed"
+    TARGET_INVALID = "target_invalid"
+    KEYCHAIN_UNAVAILABLE = "keychain_unavailable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +137,7 @@ class RelayResult:
     accepted: bool
     error: RelayError = RelayError.NONE
     detail: str = ""
+    delivery_uncertain: bool = False
 
 
 @dataclass(frozen=True, slots=True)

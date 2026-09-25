@@ -207,11 +207,14 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._enabled.setAction_("relayChanged:")
         self._enabled.setAccessibilityLabel_("iMessage 转发")
         self._target = AppKit.NSTextField.alloc().init()
-        self._target.setPlaceholderString_("手机号或 Apple ID")
+        self._target.setPlaceholderString_("+国家区号手机号 / iMessage 邮箱")
         self._target.setAccessibilityLabel_("转发目标")
         self._target.widthAnchor().constraintEqualToConstant_(540).setActive_(True)
         self._target.setFont_(AppKit.NSFont.systemFontOfSize_(14))
         self._queue_info = label("转发队列正常", 12, True)
+        self._bridge_status = label("尚未检查 iMessage", 12, True)
+        self._check_button = self._button("检查连接", "checkMessages:")
+        self._test_button = self._button("发送测试消息…", "sendTest:")
         return page(
             "短信转发",
             "短信进入“信息”，正文不留在这里。",
@@ -246,15 +249,12 @@ class SettingsWindowController(AppKit.NSWindowController):
                         stack(
                             [
                                 self._button("保存目标", "saveTarget:"),
-                                self._button("发送测试消息…", "sendTest:"),
+                                self._check_button,
+                                self._test_button,
                             ],
                             True,
                         ),
-                        label(
-                            "先保存目标，再测试。首次发送时 macOS 会请求控制“信息”的权限。",
-                            12,
-                            True,
-                        ),
+                        self._bridge_status,
                     ]
                 ),
                 group(
@@ -405,7 +405,12 @@ class SettingsWindowController(AppKit.NSWindowController):
     def refresh(self, include_target=True):
         self._enabled.setState_(int(self._delegate.relay_enabled()))
         if include_target:
-            self._target.setStringValue_(self._delegate.relay_target() or "")
+            self._loaded_target = self._delegate.relay_target() or ""
+            self._target.setStringValue_(self._loaded_target)
+        busy, bridge_status = self._delegate.bridge_status()
+        self._bridge_status.setStringValue_(bridge_status)
+        self._check_button.setEnabled_(not busy)
+        self._test_button.setEnabled_(not busy)
         snapshot = self._delegate.current_snapshot()
         state = snapshot.data_state
         self._connection.setStringValue_(connection_title(snapshot))
@@ -546,7 +551,23 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.IBAction
     def saveTarget_(self, _sender):
-        self._delegate.set_relay_target(str(self._target.stringValue()))
+        if self._delegate.set_relay_target(str(self._target.stringValue())):
+            self.refresh()
+
+    @objc.python_method
+    def _target_saved(self):
+        if str(self._target.stringValue()).strip() == getattr(self, "_loaded_target", "").strip():
+            return True
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("请先保存目标")
+        alert.setInformativeText_("输入框中的目标尚未保存。本次不会使用旧目标发送或检查。")
+        alert.runModal()
+        return False
+
+    @objc.IBAction
+    def checkMessages_(self, _sender):
+        if self._target_saved():
+            self._delegate.check_messages()
 
     @objc.python_method
     def _confirm(self, title, detail):
@@ -559,7 +580,7 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.IBAction
     def sendTest_(self, _sender):
-        if self._confirm(
+        if self._target_saved() and self._confirm(
             "发送 iMessage 测试？", "将向已保存的目标发送一条测试消息。不会通过 SIM 发送短信。"
         ):
             self._delegate.send_test_message()

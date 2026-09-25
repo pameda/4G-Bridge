@@ -51,7 +51,7 @@ class SMSRelay:
 
     def retry_cleanup(self) -> None:
         for record in self._database.cleanup_pending():
-            if self._cleaner.delete(record.locations):
+            if self._delete(record.locations):
                 self._database.transition(record.message_hash, RelayStatus.SENT)
 
     def recover_interrupted(self) -> None:
@@ -60,11 +60,19 @@ class SMSRelay:
         for record in self._database.records_with_status(RelayStatus.SENDING):
             self._database.transition(record.message_hash, RelayStatus.DELIVERY_UNKNOWN)
 
+    def _delete(self, locations: tuple[tuple[str, int], ...]) -> bool:
+        try:
+            return self._cleaner.delete(locations)
+        except Exception:
+            return False
+
     def _attempt(self, record: RelayRecord, message: AssembledSMS) -> RelayRecord:
         self._database.transition(record.message_hash, RelayStatus.SENDING)
         result = self._bridge.relay(message.sender, message.timestamp, message.body)
         if result.accepted:
-            if self._cleaner.delete(message.locations):
+            # Persist acceptance before module cleanup, which can fail or raise independently.
+            self._database.transition(record.message_hash, RelayStatus.CLEANUP_PENDING)
+            if self._delete(message.locations):
                 self._database.transition(record.message_hash, RelayStatus.SENT)
             else:
                 self._database.transition(
@@ -72,6 +80,14 @@ class SMSRelay:
                     RelayStatus.CLEANUP_PENDING,
                     last_error="module_delete_failed",
                 )
+            updated = self._database.get(record.message_hash)
+            assert updated is not None
+            return updated
+
+        if result.delivery_uncertain:
+            self._database.transition(
+                record.message_hash, RelayStatus.DELIVERY_UNKNOWN, last_error=result.error
+            )
             updated = self._database.get(record.message_hash)
             assert updated is not None
             return updated

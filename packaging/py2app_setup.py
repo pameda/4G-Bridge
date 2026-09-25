@@ -18,8 +18,8 @@ OPTIONS = {
         "CFBundleDisplayName": "4G Bridge",
         "CFBundleIdentifier": "com.pameda.fourgbridge",
         "CFBundleName": "4G Bridge",
-        "CFBundleShortVersionString": "0.1.2",
-        "CFBundleVersion": "3",
+        "CFBundleShortVersionString": "0.1.3",
+        "CFBundleVersion": "4",
         "LSMinimumSystemVersion": "15.0",
         "LSUIElement": True,
         "NSAppleEventsUsageDescription": (

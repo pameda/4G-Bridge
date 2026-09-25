@@ -72,6 +72,13 @@ class PreviewDelegate:
     def relay_queue_summary(self):
         return "转发队列正常"
 
+    def bridge_status(self):
+        return (
+            False,
+            "手机号缺少国家区号或格式无效。请使用 +国家区号手机号（中国大陆为 +86），"
+            "或有效的 iMessage 邮箱；保存后重新检查。",
+        )
+
 
 def run(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)

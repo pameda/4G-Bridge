@@ -101,3 +101,32 @@ def test_retry_budget_stops_after_three_retries(tmp_path) -> None:
     assert record.retry_count == 4
     relay.enqueue(_message())
     assert bridge.calls == 4
+
+
+def test_timeout_retains_sms_and_never_auto_resends(tmp_path):
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+    bridge = FakeBridge(RelayResult(False, RelayError.SCRIPT_TIMEOUT, delivery_uncertain=True))
+    cleaner = FakeCleaner()
+    relay = SMSRelay(database, bridge, cleaner)
+    record = relay.enqueue(_message())
+    assert record.status == RelayStatus.DELIVERY_UNKNOWN
+    relay.enqueue(_message())
+    assert bridge.calls == 1 and cleaner.calls == 0
+
+
+def test_cleanup_exception_cannot_erase_accepted_state(tmp_path):
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+
+    class BrokenCleaner:
+        def delete(self, locations):
+            assert database.records_with_status(RelayStatus.CLEANUP_PENDING)
+            raise OSError("USB unplugged")
+
+    bridge = FakeBridge(RelayResult(True))
+    relay = SMSRelay(database, bridge, BrokenCleaner())
+    record = relay.enqueue(_message())
+    assert record.status == RelayStatus.CLEANUP_PENDING
+    relay.recover_interrupted()
+    relay.retry_cleanup()
+    relay.enqueue(_message())
+    assert bridge.calls == 1
