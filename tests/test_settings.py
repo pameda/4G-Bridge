@@ -16,3 +16,16 @@ def test_invalid_settings_fall_back(tmp_path) -> None:
     path = tmp_path / "settings.json"
     path.write_text("broken", encoding="utf-8")
     assert SettingsStore(path).load() == Settings()
+
+
+def test_appearance_migration_and_validation(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    path.write_text('{"relay_enabled": true}')
+    assert store.load() == Settings(True)
+    store.save(Settings(True, 30, "dark"))
+    assert store.load().appearance == "dark"
+    path.write_text('{"appearance": "unknown"}')
+    assert store.load().appearance == "system"
+    path.write_text("[]")
+    assert store.load() == Settings()

@@ -1,5 +1,11 @@
 # 4G Bridge 架构
 
+## V1.2 界面分层
+
+`ui/components.py` 提供原生布局、语义色、SF Symbols 和速度图；`ui/status_panel.py` 是菜单栏快速面板；`ui/settings_window.py` 组织总览、流量、短信转发、设备和设置。无副作用的展示规则与短期内存采样位于 `support/presentation.py`，可独立测试。ApplicationController 在主线程发布已采集的数据；视图不会直接探测设备、读取短信或更改网络。
+
+外观偏好以可向后兼容的 `appearance` 字段持久化，数据开启状态仍不持久化。图表只消费真实 interface counters；无样本为缺测，不虚构套餐百分比、功耗、温度或应用用量。
+
 ## 原则
 
 核心逻辑与 AppKit 分离。USB、AT、Messages、网络命令、Keychain 与 SQLite 都有窄接口，硬件不可用时仍能进行确定性测试。后台线程不得直接更新 UI，所有结果回到 AppKit 主线程。

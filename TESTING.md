@@ -8,9 +8,19 @@
 ./script/test.sh
 ```
 
-门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。0.1.1 本机结果为 61 passed，整体覆盖率 89.43%，核心业务模块覆盖率 95%；门槛分别为 80% 与 90%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过真实打包 UI 检查验证。
+门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。0.1.2 本机结果为 70 passed，整体覆盖率 89.88%，核心业务模块覆盖率 95%；门槛分别为 80% 与 90%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过真实打包 UI 检查验证。
 
-GitHub Actions 的 `main` 与 `v0.1.0` 工作流均已通过；tag 工作流在官方 arm64 macOS runner 上重新安装锁定依赖、重跑门禁、生成并发布 DMG。
+0.1.2 新增无硬件副作用的五页深浅色、快速面板截图检查，以及数据状态、缺设备、主题切换、未保存目标保护、真实采样展示／断开清空断言。视觉开发采用内存夹具，不代表实机流量；测试不会发送短信、iMessage 或开启 SIM 数据。0.1.1 的联网实测记录保留，不能当作本版重新执行了联网测试。
+
+GitHub Actions 的既有 `v0.1.0`、`v0.1.1` 发布工作流已通过；tag 工作流在官方 arm64 macOS runner 上重新安装锁定依赖、重跑门禁、生成并发布 DMG。各次运行的最终状态以 GitHub Actions 为准。
+
+### 0.1.2 本机界面验收
+
+- 构建产物直接执行 UI smoke：五页 × 深浅色、原生 NSPopover 的实际打开／关闭与截图均通过，无布局冲突或 traceback。
+- 正常启动最终 `.app` 并查看实际窗口：模块 QDC507、中国电信、FDD LTE、当前接口与信号正常显示；数据 OFF，转发未开启。
+- 仅截取应用自身窗口核对工具栏、分组卡片、数字和布局，没有收集其他应用画面。
+- DMG 只读挂载与卸载、arm64、ad-hoc 签名、Info.plist、SHA-256 检查通过。校验文件使用相对文件名，便于下载后直接校验。
+- 本轮没有重新执行收费上网探测、SMS 收发／删除或 iMessage 发送。未公证，不能保证首次安装不出现 Gatekeeper 提示。
 
 覆盖内容包括 AT 分片/URC/prompt/timeout、Unicode/Emoji PDU、8/16-bit multipart、去重、重试、cleanup、SQLite 损坏隔离、AppleScript argv 注入防护、USB endpoint 变化、ECM 重编号、数据确认门、counter reset、日/月流量、设置权限与日志脱敏。
 

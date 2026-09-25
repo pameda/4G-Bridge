@@ -15,9 +15,10 @@ from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.imessage.runner import AppleScriptRunner
 from fourg_bridge.models import DataState, DeviceState, ModemSnapshot, RelayError, RelayStatus
 from fourg_bridge.modem.usb_discovery import USBDiscovery
+from fourg_bridge.network.traffic import TrafficLedger
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
-from fourg_bridge.storage.settings import Settings, SettingsStore
+from fourg_bridge.storage.settings import SettingsStore
 from fourg_bridge.support.privacy import redact_identifier
 from fourg_bridge.ui.menu_bar import MenuBarController
 from fourg_bridge.ui.settings_window import SettingsWindowController
@@ -28,12 +29,16 @@ class ApplicationController:
         support = Path.home() / "Library" / "Application Support" / "4G Bridge"
         self._settings_store = SettingsStore(support / "settings.json")
         self._settings = self._settings_store.load()
+        self._apply_appearance()
         self._keychain = KeychainStore()
         self._database = RelayDatabase(support / "relay.sqlite")
         script = resources.files("fourg_bridge.imessage.resources").joinpath("relay.applescript")
         self._bridge = MessagesBridge(AppleScriptRunner(Path(str(script))), self._keychain)
         self._discovery = USBDiscovery()
         self._snapshot = ModemSnapshot()
+        self._traffic_snapshot = None
+        self._traffic_usage = TrafficLedger(support / "traffic.sqlite").usage()
+        self._recent_relay = None
         self._runtime: ModemRuntime | None = None
         self._runtime_lock = threading.RLock()
         self._menu = MenuBarController.alloc().initWithDelegate_(self)
@@ -98,14 +103,14 @@ class ApplicationController:
                         self._runtime = ModemRuntime(self._discovery, self._database, self._bridge)
                     snapshot = self._runtime.snapshot()
                     AppHelper.callAfter(
-                        self._menu.setTrafficSnapshot_usage_,
+                        self._apply_traffic,
                         self._runtime.traffic_snapshot,
                         self._runtime.traffic_usage,
                     )
                     if self._settings.relay_enabled:
                         recent = self._runtime.poll_sms()
                         if recent:
-                            AppHelper.callAfter(self._menu.setRelayStatus_recent_, True, recent)
+                            AppHelper.callAfter(self._apply_recent_relay, recent)
             AppHelper.callAfter(self._apply_snapshot, snapshot)
         except Exception as error:
             with self._runtime_lock:
@@ -127,6 +132,8 @@ class ApplicationController:
             snapshot = replace(snapshot, data_state=self._snapshot.data_state)
         previously_connected = self._snapshot.descriptor is not None
         self._snapshot = snapshot
+        if snapshot.descriptor is None:
+            self._apply_traffic(None, self._traffic_usage)
         if previously_connected and snapshot.descriptor is None:
             self._force_data_off("USB disconnect")
         self._menu.update_(snapshot)
@@ -135,6 +142,37 @@ class ApplicationController:
 
     def current_snapshot(self) -> ModemSnapshot:
         return self._snapshot
+
+    def _apply_traffic(self, snapshot, usage) -> None:
+        self._traffic_snapshot = snapshot
+        self._traffic_usage = usage
+        self._menu.setTrafficSnapshot_usage_(snapshot, usage)
+
+    def traffic_state(self):
+        return self._traffic_snapshot, self._traffic_usage
+
+    def _apply_recent_relay(self, recent: str) -> None:
+        self._recent_relay = recent
+        self._menu.setRelayStatus_recent_(self._settings.relay_enabled, recent)
+
+    def recent_relay(self) -> str | None:
+        return self._recent_relay
+
+    def appearance(self) -> str:
+        return self._settings.appearance
+
+    def _apply_appearance(self) -> None:
+        name = {"light": "NSAppearanceNameAqua", "dark": "NSAppearanceNameDarkAqua"}.get(
+            self._settings.appearance
+        )
+        AppKit.NSApp.setAppearance_(AppKit.NSAppearance.appearanceNamed_(name) if name else None)
+
+    def set_appearance(self, value: str) -> None:
+        if value not in ("system", "light", "dark"):
+            return
+        self._settings = replace(self._settings, appearance=value)
+        self._settings_store.save(self._settings)
+        self._apply_appearance()
 
     def redetect(self) -> None:
         if self._data_busy:
@@ -213,13 +251,17 @@ class ApplicationController:
         self._settings_window.window().makeKeyAndOrderFront_(None)
         AppKit.NSApp.activateIgnoringOtherApps_(True)
 
+    def show_overview(self) -> None:
+        self._settings_window._tabs.setSelectedTabViewItemIndex_(0)
+        self.show_settings()
+
     def relay_enabled(self) -> bool:
         return self._settings.relay_enabled
 
     def set_relay_enabled(self, enabled: bool) -> None:
-        self._settings = Settings(enabled, self._settings.poll_interval_seconds)
+        self._settings = replace(self._settings, relay_enabled=enabled)
         self._settings_store.save(self._settings)
-        self._menu.setRelayStatus_recent_(enabled, None)
+        self._menu.setRelayStatus_recent_(enabled, self._recent_relay)
 
     def relay_target(self) -> str | None:
         try:

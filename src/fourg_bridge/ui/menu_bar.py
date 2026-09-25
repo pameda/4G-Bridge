@@ -4,6 +4,8 @@ import AppKit
 import objc
 
 from fourg_bridge.models import DataState, DeviceState, ModemSnapshot
+from fourg_bridge.support.presentation import format_bytes as _format_bytes
+from fourg_bridge.ui.status_panel import StatusPanelController
 
 
 class MenuBarController(AppKit.NSObject):
@@ -16,7 +18,16 @@ class MenuBarController(AppKit.NSObject):
             AppKit.NSVariableStatusItemLength
         )
         self._menu = AppKit.NSMenu.alloc().initWithTitle_("4G Bridge")
-        self._status_item.setMenu_(self._menu)
+        self._panel = StatusPanelController.alloc().initWithDelegate_(delegate)
+        self._popover = AppKit.NSPopover.alloc().init()
+        self._popover.setContentViewController_(self._panel)
+        self._popover.setBehavior_(AppKit.NSPopoverBehaviorTransient)
+        self._popover.setContentSize_(AppKit.NSMakeSize(380, 510))
+        self._panel._popover = self._popover
+        button = self._status_item.button()
+        button.setTarget_(self)
+        button.setAction_("statusClicked:")
+        button.sendActionOn_(AppKit.NSEventMaskLeftMouseUp | AppKit.NSEventMaskRightMouseUp)
         self._values: dict[str, AppKit.NSMenuItem] = {}
         self._build_menu()
         self.update_(ModemSnapshot())
@@ -26,6 +37,7 @@ class MenuBarController(AppKit.NSObject):
         self._menu.setAutoenablesItems_(False)
         heading = AppKit.NSMenuItem.sectionHeaderWithTitle_("4G Bridge")
         self._menu.addItem_(heading)
+        self._add_action("打开连接总览…", "showOverview:")
         self._add_value("device", "QDC507", "未连接")
         self._add_value("operator", "运营商", "—")
         self._add_value("signal", "信号", "—")
@@ -88,6 +100,7 @@ class MenuBarController(AppKit.NSObject):
 
     @objc.python_method
     def update_(self, snapshot: ModemSnapshot) -> None:
+        self._panel.refresh(snapshot)
         button = self._status_item.button()
         if snapshot.device_state == DeviceState.MISSING:
             symbol = "antenna.radiowaves.left.and.right.slash"
@@ -178,10 +191,27 @@ class MenuBarController(AppKit.NSObject):
         self._set("relay", "✓ 已开启" if enabled else "未开启")
         self._set("recent", recent or "—")
 
+    @objc.IBAction
+    def statusClicked_(self, _sender):
+        event = AppKit.NSApp.currentEvent()
+        if event and event.type() == AppKit.NSEventTypeRightMouseUp:
+            self._popover.performClose_(None)
+            self._status_item.popUpStatusItemMenu_(self._menu)
+        elif self._popover.isShown():
+            self._popover.performClose_(None)
+        else:
+            self._panel.refresh(self._delegate.current_snapshot())
+            button = self._status_item.button()
+            self._popover.showRelativeToRect_ofView_preferredEdge_(
+                button.bounds(), button, AppKit.NSMinYEdge
+            )
+
     @objc.python_method
     def setTrafficSnapshot_usage_(self, snapshot, usage) -> None:
+        self._set("traffic", _format_bytes(usage.today_rx + usage.today_tx))
+        self._set("month", _format_bytes(usage.month_rx + usage.month_tx))
         if snapshot is None:
-            for key in ("download", "upload", "session", "traffic", "month"):
+            for key in ("download", "upload", "session"):
                 self._set(key, "—")
             return
         self._set("download", f"{_format_bytes(snapshot.download_bps)}/s")
@@ -209,14 +239,9 @@ class MenuBarController(AppKit.NSObject):
         self._delegate.show_settings()
 
     @objc.IBAction
+    def showOverview_(self, _sender):
+        self._delegate.show_overview()
+
+    @objc.IBAction
     def quit_(self, _sender):
         self._delegate.quit()
-
-
-def _format_bytes(value: float | int) -> str:
-    amount = float(value)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if amount < 1024 or unit == "TB":
-            return f"{amount:.1f} {unit}"
-        amount /= 1024
-    return "0 B"

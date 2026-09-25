@@ -55,6 +55,7 @@ class ModemRuntime:
 
     def snapshot(self) -> ModemSnapshot:
         snapshot = self._controller.snapshot()
+        self.traffic_snapshot = None
         try:
             interface = self._ecm.discover()
         except OSError:
@@ -78,6 +79,7 @@ class ModemRuntime:
                 self.traffic_usage = self._traffic_ledger.record(self.traffic_snapshot)
             except (OSError, ValueError, subprocess.SubprocessError):
                 self.traffic_snapshot = None
+        self.traffic_usage = self._traffic_ledger.usage()
         return snapshot
 
     def poll_sms(self) -> str | None:

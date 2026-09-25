@@ -11,6 +11,7 @@ from pathlib import Path
 class Settings:
     relay_enabled: bool = False
     poll_interval_seconds: int = 20
+    appearance: str = "system"
 
 
 class SettingsStore:
@@ -20,11 +21,13 @@ class SettingsStore:
     def load(self) -> Settings:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
+            appearance = payload.get("appearance", "system")
             return Settings(
                 relay_enabled=bool(payload.get("relay_enabled", False)),
                 poll_interval_seconds=max(10, int(payload.get("poll_interval_seconds", 20))),
+                appearance=appearance if appearance in ("system", "light", "dark") else "system",
             )
-        except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+        except (FileNotFoundError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
             return Settings()
 
     def save(self, settings: Settings) -> None:

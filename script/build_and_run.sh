@@ -45,7 +45,7 @@ package_dmg() {
   mkdir -p "$ARTIFACTS"
   stage="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-dmg.XXXXXX)"
   mount_point="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-mount.XXXXXX)"
-  dmg="$ARTIFACTS/4G-Bridge-0.1.1-arm64.dmg"
+  dmg="$ARTIFACTS/4G-Bridge-0.1.2-arm64.dmg"
   sha_file="$dmg.sha256"
   trap '/bin/rm -rf "$stage" "$mount_point"' RETURN
   /bin/cp -R "$APP_BUNDLE" "$stage/"
@@ -54,7 +54,7 @@ package_dmg() {
   /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "$dmg"
   [[ -d "$mount_point/$APP_NAME.app" ]]
   /usr/bin/hdiutil detach "$mount_point"
-  /usr/bin/shasum -a 256 "$dmg" > "$sha_file"
+  (cd "$ARTIFACTS" && /usr/bin/shasum -a 256 "$(basename "$dmg")") > "$sha_file"
   echo "$dmg"
   echo "$sha_file"
 }
