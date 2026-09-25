@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fourg-bridge"
+version = "0.1.0"
+description = "Privacy-first QDC507 modem controller and SMS to iMessage bridge for macOS"
+requires-python = ">=3.14"
+dependencies = [
+  "pyobjc-core==12.2.2",
+  "pyobjc-framework-Cocoa==12.2.2",
+  "pyobjc-framework-Security==12.2.2",
+  "pyusb==1.3.1",
+  "libusb-package==1.0.30.0",
+]
+
+[project.optional-dependencies]
+build = ["py2app==0.28.10"]
+dev = [
+  "mypy==1.18.2",
+  "pytest==8.4.2",
+  "pytest-cov==7.0.0",
+  "ruff==0.13.2",
+]
+
+[project.scripts]
+fourg-bridge = "fourg_bridge.app.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fourg_bridge = ["imessage/resources/*.applescript"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --cov=fourg_bridge --cov-report=term-missing"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["fourg_bridge"]
+omit = [
+  "src/fourg_bridge/app/*",
+  "src/fourg_bridge/ui/*",
+  "src/fourg_bridge/storage/keychain.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = ["if TYPE_CHECKING:", "pragma: no cover"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+packages = ["fourg_bridge"]
+exclude = ["src/fourg_bridge/(ui|app)/"]
