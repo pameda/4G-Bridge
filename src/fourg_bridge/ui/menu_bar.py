@@ -133,6 +133,7 @@ class MenuBarController(AppKit.NSObject):
         self._set("traffic", _format_bytes(usage.today_rx + usage.today_tx))
         self._set("month", _format_bytes(usage.month_rx + usage.month_tx))
 
+    @objc.python_method
     def _set(self, key: str, value: str) -> None:
         item = self._values[key]
         label = str(item.representedObject())

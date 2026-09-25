@@ -25,6 +25,22 @@ ORDER = """An asterisk (*) denotes that a network service is disabled.
 (Hardware Port: Baiwang QDC507, Device: en9)
 """
 
+MIXED_HARDWARE = """Hardware Port: USB 10/100/1000 LAN
+Device: en9
+Ethernet Address: 10:20:30:40:50:60
+
+Hardware Port: EG25G-QDC507
+Device: en11
+Ethernet Address: 11:22:33:44:55:77
+"""
+
+MIXED_ORDER = """An asterisk (*) denotes that a network service is disabled.
+(1) USB 10/100/1000 LAN
+(Hardware Port: USB 10/100/1000 LAN, Device: en9)
+(2) EG25G-QDC507 2
+(Hardware Port: EG25G-QDC507, Device: en11)
+"""
+
 
 def test_interface_renumbering_parsers() -> None:
     ports = parse_hardware_ports(HARDWARE)
@@ -54,6 +70,21 @@ def test_detector_and_network_state(monkeypatch) -> None:
     assert ECMDetector.gateway("en9") == "192.168.225.1"
     assert ECMDetector.default_interface() == "en0"
     assert ECMDetector.has_vpn()
+
+
+def test_detector_prefers_qdc507_over_generic_usb_ethernet(monkeypatch) -> None:
+    def command(*arguments, allow_failure=False):
+        if "-listallhardwareports" in arguments:
+            return MIXED_HARDWARE
+        if "-listnetworkserviceorder" in arguments:
+            return MIXED_ORDER
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(ECMDetector, "_run", command)
+    interface = ECMDetector().discover()
+    assert interface is not None
+    assert interface.device == "en11"
+    assert interface.service == "EG25G-QDC507 2"
 
 
 class Network:

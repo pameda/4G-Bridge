@@ -44,7 +44,7 @@ class ApplicationController:
         self._timer = timer_factory(5.0, self, "timerFired:", None, True)
         workspace_center = AppKit.NSWorkspace.sharedWorkspace().notificationCenter()
         workspace_center.addObserver_selector_name_object_(
-            self, "workspaceDidSleep:", AppKit.NSWorkspaceDidSleepNotification, None
+            self, "workspaceDidSleep:", AppKit.NSWorkspaceWillSleepNotification, None
         )
         workspace_center.addObserver_selector_name_object_(
             self, "workspaceDidWake:", AppKit.NSWorkspaceDidWakeNotification, None

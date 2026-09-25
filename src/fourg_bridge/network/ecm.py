@@ -63,22 +63,30 @@ def parse_ordered_services(output: str) -> tuple[tuple[str, str | None], ...]:
 
 
 class ECMDetector:
-    MODEM_HINTS = ("baiwang", "qdc507", "ec25", "usb 10/100", "usb ethernet")
+    SPECIFIC_MODEM_HINTS = ("baiwang", "qdc507", "ec25", "eg25g")
+    GENERIC_MODEM_HINTS = ("usb 10/100", "usb ethernet")
 
     def discover(self) -> NetworkInterface | None:
         ports = parse_hardware_ports(self._run("/usr/sbin/networksetup", "-listallhardwareports"))
         services = parse_service_order(
             self._run("/usr/sbin/networksetup", "-listnetworkserviceorder")
         )
-        for port in ports:
-            haystack = f"{port.hardware_port} {services.get(port.device, '')}".casefold()
-            if any(hint in haystack for hint in self.MODEM_HINTS):
-                return NetworkInterface(
-                    port.hardware_port,
-                    port.device,
-                    port.ethernet_address,
-                    services.get(port.device),
-                )
+        candidates = tuple(
+            (
+                port,
+                f"{port.hardware_port} {services.get(port.device, '')}".casefold(),
+            )
+            for port in ports
+        )
+        for hints in (self.SPECIFIC_MODEM_HINTS, self.GENERIC_MODEM_HINTS):
+            for port, haystack in candidates:
+                if any(hint in haystack for hint in hints):
+                    return NetworkInterface(
+                        port.hardware_port,
+                        port.device,
+                        port.ethernet_address,
+                        services.get(port.device),
+                    )
         return None
 
     @staticmethod
