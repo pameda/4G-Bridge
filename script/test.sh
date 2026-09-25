@@ -16,5 +16,5 @@ cd "$ROOT_DIR"
 "$PYTHON" -m mypy "$ROOT_DIR/src/fourg_bridge"
 "$PYTHON" -m pytest "$ROOT_DIR/tests"
 "$PYTHON" -m coverage report \
-  --include='src/fourg_bridge/sms/*,src/fourg_bridge/imessage/formatter.py,src/fourg_bridge/network/data_session.py,src/fourg_bridge/network/traffic.py,src/fourg_bridge/storage/database.py,src/fourg_bridge/storage/settings.py,src/fourg_bridge/support/privacy.py' \
+  --include='src/fourg_bridge/sms/*,src/fourg_bridge/imessage/formatter.py,src/fourg_bridge/network/data_session.py,src/fourg_bridge/network/traffic.py,src/fourg_bridge/network/failover.py,src/fourg_bridge/network/connectivity.py,src/fourg_bridge/storage/budget.py,src/fourg_bridge/storage/database.py,src/fourg_bridge/storage/settings.py,src/fourg_bridge/support/privacy.py' \
   --fail-under=90

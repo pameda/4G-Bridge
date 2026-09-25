@@ -36,28 +36,49 @@ class DataSessionManager:
         self._network = network
         self._modem = modem
         self._state = DataState.OFF
+        self._cellular_priority = False
 
     @property
     def state(self) -> DataState:
         return self._state
 
-    def set_enabled(self, enabled: bool, user_confirmed: bool = False) -> DataTransition:
+    def set_enabled(
+        self, enabled: bool, user_confirmed: bool = False, *, prefer_cellular: bool = False
+    ) -> DataTransition:
         previous = self._state
         if enabled and not user_confirmed:
             return DataTransition(previous, previous, False, "user confirmation required")
         if enabled:
             self._state = DataState.ENABLING
-            ensure_priority = getattr(self._network, "ensure_wifi_precedes", None)
-            if callable(ensure_priority) and not ensure_priority(self._service):
-                self._state = DataState.PROTECTION_FAILED
-                return DataTransition(previous, self._state, False, "Wi-Fi priority check failed")
+            self._cellular_priority = prefer_cellular
+            ensure_priority = getattr(
+                self._network,
+                "ensure_cellular_precedes" if prefer_cellular else "ensure_wifi_precedes",
+                None,
+            )
+            try:
+                priority_ready = not callable(ensure_priority) or ensure_priority(self._service)
+            except Exception:
+                priority_ready = False
+            if not priority_ready:
+                rollback = self.force_safe_off()
+                return DataTransition(
+                    previous,
+                    rollback.current,
+                    rollback.protected,
+                    "网络优先级调整失败，4G 已回退。",
+                )
             try:
                 attached = self._modem.set_attached(True)
                 service_enabled = attached and self._network.set_enabled(self._service, True)
                 verified = service_enabled and self._network.is_enabled(self._service)
                 ready = getattr(self._network, "wait_ready", None)
                 link_ready = verified and (not callable(ready) or ready())
-                verify_default = getattr(self._network, "verify_wifi_default", None)
+                verify_default = getattr(
+                    self._network,
+                    "verify_cellular_default" if prefer_cellular else "verify_wifi_default",
+                    None,
+                )
                 wifi_is_default = not callable(verify_default) or verify_default()
             except Exception:
                 rollback = self.force_safe_off()
@@ -90,11 +111,12 @@ class DataSessionManager:
                 self._state = (
                     DataState.OFF if service_off and detached else DataState.PROTECTION_FAILED
                 )
+                self._restore_priority()
                 return DataTransition(
                     previous,
                     self._state,
                     self._state == DataState.OFF,
-                    "Wi-Fi was not the default route; 4G rolled back",
+                    "预期网络未成为默认接口，4G 已回退。",
                 )
             self._state = (
                 DataState.ON
@@ -112,12 +134,19 @@ class DataSessionManager:
             verified = False
         if verified:
             self._state = DataState.OFF
-            return DataTransition(previous, self._state, True, "network service disabled")
+            restored = self._restore_priority()
+            return DataTransition(
+                previous,
+                self._state,
+                True,
+                "network service disabled" if restored else "数据已关闭；Wi-Fi 优先级恢复失败。",
+            )
         try:
             detached = self._modem.set_attached(False)
         except Exception:
             detached = False
         self._state = DataState.OFF if detached else DataState.PROTECTION_FAILED
+        self._restore_priority()
         return DataTransition(
             previous,
             self._state,
@@ -127,3 +156,15 @@ class DataSessionManager:
 
     def force_safe_off(self) -> DataTransition:
         return self.set_enabled(False, user_confirmed=False)
+
+    def _restore_priority(self) -> bool:
+        if not self._cellular_priority:
+            return True
+        restore = getattr(self._network, "ensure_wifi_precedes", None)
+        try:
+            if callable(restore) and restore(self._service):
+                self._cellular_priority = False
+                return True
+        except Exception:
+            pass
+        return False

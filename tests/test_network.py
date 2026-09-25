@@ -169,8 +169,40 @@ def test_enable_stops_when_wifi_priority_cannot_be_protected() -> None:
     modem = Modem()
     manager = DataSessionManager("Baiwang", UnsafeNetwork(), modem)
     result = manager.set_enabled(True, user_confirmed=True)
-    assert result.current == DataState.PROTECTION_FAILED
+    assert result.current == DataState.OFF
     assert modem.attached
+
+
+def test_failover_uses_cellular_default_then_restores_wifi():
+    calls = []
+
+    class FailoverNetwork(Network):
+        def ensure_cellular_precedes(self, service):
+            calls.append("cellular-first")
+            return True
+
+        def verify_cellular_default(self):
+            return True
+
+        def ensure_wifi_precedes(self, service):
+            calls.append("wifi-first")
+            return True
+
+    manager = DataSessionManager("QDC507", FailoverNetwork(), Modem())
+    assert manager.set_enabled(True, True, prefer_cellular=True).current == DataState.ON
+    assert manager.force_safe_off().protected
+    assert calls == ["cellular-first", "wifi-first"]
+
+
+def test_failed_priority_restoration_does_not_claim_success():
+    class FailedRestore(Network):
+        def ensure_wifi_precedes(self, service):
+            raise TimeoutError
+
+    manager = DataSessionManager("QDC507", FailedRestore(), Modem())
+    manager._cellular_priority = True
+    result = manager.force_safe_off()
+    assert result.protected and "恢复失败" in result.detail
 
 
 def test_enable_rolls_back_when_wifi_is_not_default() -> None:
@@ -257,6 +289,53 @@ def test_real_macos_dhcp_gateway_format(monkeypatch) -> None:
         ),
     )
     assert ECMDetector.gateway("en11") == "192.168.225.1"
+
+
+def test_failed_network_read_is_not_misreported_as_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: SimpleNamespace(returncode=1))
+    with pytest.raises(OSError):
+        NetworkSetupControl().is_enabled("QDC507")
+
+
+def test_cellular_priority_only_moves_modem(monkeypatch):
+    from types import SimpleNamespace
+
+    names = ["Ethernet", "Wi-Fi", "Thunderbolt", "QDC507", "VPN"]
+    calls = []
+
+    def run(args, **kw):
+        if "-ordernetworkservices" in args:
+            names[:] = args[2:]
+            calls.append(tuple(names))
+            return SimpleNamespace(returncode=0, stdout="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="\n".join(
+                f"({i}) {name}\n(Hardware Port: {name}, Device: en{i})"
+                for i, name in enumerate(names, 1)
+            ),
+        )
+
+    monkeypatch.setattr("subprocess.run", run)
+    control = NetworkSetupControl("en4")
+    assert control.ensure_cellular_precedes("QDC507")
+    assert names == ["Ethernet", "QDC507", "Wi-Fi", "Thunderbolt", "VPN"]
+    assert control.ensure_wifi_precedes("QDC507")
+    assert [name for name in names if name != "QDC507"] == [
+        "Ethernet",
+        "Wi-Fi",
+        "Thunderbolt",
+        "VPN",
+    ]
+    assert len(calls) == 2
+    monkeypatch.setattr(ECMDetector, "default_interface", lambda: "en4")
+    assert control.verify_cellular_default()
+    monkeypatch.setattr(ECMDetector, "default_interface", lambda: "en0")
+    assert not control.verify_cellular_default()
 
 
 def test_attached_modem_is_not_reattached() -> None:

@@ -1,11 +1,14 @@
 from types import SimpleNamespace
 
+import pytest
+
 from fourg_bridge.app.runtime import ModemRuntime
 from fourg_bridge.models import ATResponse, DataState, DeviceDescriptor
 from fourg_bridge.network.data_session import DataTransition
 
 
-def test_recovery_is_bounded_and_requires_explicit_enable(monkeypatch):
+@pytest.mark.parametrize("automatic", [False, True])
+def test_recovery_is_bounded_and_requires_explicit_enable(monkeypatch, automatic):
     calls = []
     failed = DataTransition(DataState.OFF, DataState.OFF, True, "no DHCP", "network_not_ready")
     session = SimpleNamespace(
@@ -34,7 +37,7 @@ def test_recovery_is_bounded_and_requires_explicit_enable(monkeypatch):
     assert runtime.set_data(False, False) == failed
     assert runtime.set_data(True, False) == failed
     assert calls == []
-    assert runtime.set_data(True, True) == failed
+    assert runtime.set_data(True, True, automatic=automatic) == failed
     assert calls.count("AT+CFUN=1,1") == 1
     assert calls.count("close") == 1
 
@@ -44,7 +47,7 @@ def test_unsafe_off_never_reboots_modem():
         DataState.OFF, DataState.PROTECTION_FAILED, False, "unsafe", "network_not_ready"
     )
     runtime = ModemRuntime.__new__(ModemRuntime)
-    runtime._data = SimpleNamespace(set_enabled=lambda *a: failed)
+    runtime._data = SimpleNamespace(set_enabled=lambda *a, **kw: failed)
     assert runtime.set_data(True, True) == failed
 
 
@@ -52,9 +55,16 @@ def test_sleep_cancellation_cannot_start_recovery():
     runtime = ModemRuntime.__new__(ModemRuntime)
     safe = DataTransition(DataState.ON, DataState.OFF, True)
 
-    def enable(*args):
+    def enable(*args, **kwargs):
         runtime.cancel_pending_enable()
         return DataTransition(DataState.OFF, DataState.OFF, True, "no IP", "network_not_ready")
 
     runtime._data = SimpleNamespace(set_enabled=enable, force_safe_off=lambda: safe)
     assert runtime.set_data(True, True) == safe
+
+
+def test_automatic_enable_still_requires_saved_authority():
+    failed = DataTransition(DataState.OFF, DataState.OFF, True, "no DHCP", "network_not_ready")
+    runtime = ModemRuntime.__new__(ModemRuntime)
+    runtime._data = SimpleNamespace(set_enabled=lambda *a, **kw: failed)
+    assert runtime.set_data(True, False, automatic=True) == failed

@@ -28,6 +28,12 @@ class NetworkSetupControl:
         return False
 
     def ensure_wifi_precedes(self, service: str) -> bool:
+        return self._prioritize(service, cellular_first=False)
+
+    def ensure_cellular_precedes(self, service: str) -> bool:
+        return self._prioritize(service, cellular_first=True)
+
+    def _prioritize(self, service: str, *, cellular_first: bool) -> bool:
         completed = subprocess.run(
             ["/usr/sbin/networksetup", "-listnetworkserviceorder"],
             capture_output=True,
@@ -51,10 +57,10 @@ class NetworkSetupControl:
             return True
         wifi_index = names.index(wifi)
         modem_index = names.index(service)
-        if wifi_index < modem_index:
+        if (modem_index < wifi_index) == cellular_first:
             return True
         names.pop(modem_index)
-        names.insert(names.index(wifi) + 1, service)
+        names.insert(names.index(wifi) + (0 if cellular_first else 1), service)
         reordered = subprocess.run(
             ["/usr/sbin/networksetup", "-ordernetworkservices", *names],
             capture_output=True,
@@ -76,8 +82,11 @@ class NetworkSetupControl:
             verification.returncode == 0
             and wifi in verified_names
             and service in verified_names
-            and verified_names.index(wifi) < verified_names.index(service)
+            and (verified_names.index(service) < verified_names.index(wifi)) == cellular_first
         )
+
+    def verify_cellular_default(self) -> bool:
+        return self._interface is not None and ECMDetector.default_interface() == self._interface
 
     @staticmethod
     def verify_wifi_default() -> bool:
@@ -142,7 +151,7 @@ class NetworkSetupControl:
             check=False,
         )
         if completed.returncode:
-            return False
+            raise OSError("cannot verify network service state")
         for line in completed.stdout.splitlines():
             value = line.strip()
             if value.lstrip("*") == service:

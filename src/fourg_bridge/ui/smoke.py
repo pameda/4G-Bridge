@@ -19,6 +19,7 @@ from fourg_bridge.models import (
     TrafficSnapshot,
 )
 from fourg_bridge.network.traffic import TrafficUsage
+from fourg_bridge.storage.settings import Settings
 from fourg_bridge.ui.menu_bar import MenuBarController
 from fourg_bridge.ui.settings_window import SettingsWindowController
 
@@ -44,6 +45,9 @@ class PreviewDelegate:
 
     def relay_enabled(self):
         return False
+
+    def data_policy(self):
+        return Settings(), 0, "自动接管未开启；请先设置有限额度。"
 
     def relay_target(self):
         return None

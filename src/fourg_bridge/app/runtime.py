@@ -99,12 +99,14 @@ class ModemRuntime:
                 recent = f"{time} / {redact_identifier(record.sender)}"
         return recent
 
-    def set_data(self, enabled: bool, user_confirmed: bool = False) -> DataTransition | None:
+    def set_data(
+        self, enabled: bool, user_confirmed: bool = False, *, automatic: bool = False
+    ) -> DataTransition | None:
         if self._data is None:
             return None
         if enabled and user_confirmed:
             self._enable_cancelled = False
-        result = self._data.set_enabled(enabled, user_confirmed)
+        result = self._data.set_enabled(enabled, user_confirmed, prefer_cellular=automatic)
         if enabled and user_confirmed and self._enable_cancelled:
             return self._data.force_safe_off()
         if not (
@@ -144,7 +146,9 @@ class ModemRuntime:
                 if self._data is not None:
                     if self._enable_cancelled:
                         return self._data.force_safe_off()
-                    return self._data.set_enabled(True, user_confirmed=True)
+                    return self._data.set_enabled(
+                        True, user_confirmed=True, prefer_cellular=automatic
+                    )
                 session.close()
                 time.sleep(1)
         except Exception:
@@ -183,4 +187,6 @@ class ModemRuntime:
             ModemAttachControl(self._session.transport),
         )
         self._data.force_safe_off()
+        # Recover a previous temporary failover order after a crash/restart.
+        NetworkSetupControl(interface.device).ensure_wifi_precedes(interface.service)
         self._bound_interface = (interface.device, interface.service)

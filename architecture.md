@@ -57,6 +57,16 @@ sending（进程崩溃）→ delivery_unknown
 
 ## 权限
 
+### 0.1.4 授权式自动接管扩展
+
+原先的 OFF 默认值保留。用户保存有限额度并授权后，启动／重插／唤醒先安全关闭，再由独立策略重新确认 Wi-Fi 状态。`network/failover.py` 是无副作用状态机，三次失败开启、两次成功关闭，VPN／其他默认网络存在时暂缓。开启时临时只将 QDC507 移到 Wi-Fi 前，回退时恢复 Wi-Fi 优先，所有无关服务相对顺序保持不变。授权说明包含必要时一次 CFUN 有界恢复，失败后暂停，不循环重启。恢复期间仅在确认网络服务关闭时容忍临时缺少 counters，否则计量异常仍执行安全关闭。
+
+`storage/budget.py` 的版本独立 SQLite 表仅保存用量、锁定位、月份、接口与开机期计数。锁定在关闭命令前持久化。普通设置修改、进程重启、重插和月份变化不清除锁定位；唯有手动确认的 grant 开启下一份有限额度。`app/auto_data.py` 将约 1 秒的计量保护与较慢的 Wi-Fi 检查分为线程，不经过短信锁；到顶先关闭 ECM，再交还运行时执行安全关闭及回退。
+
+这是用户态采样保护，不是运营商硬限额，可能因系统调用／采样延迟超额。计量错误不能授权开启。独立 daily/monthly ledger 不因手动追加额度而清零。
+
+### 系统权限
+
 - Apple Events / Automation：仅控制 `com.apple.MobileSMS`。
 - Keychain：存储单一 iMessage 目标。
 - 不申请 Accessibility、Full Disk Access、Network Extension 或 DriverKit 权限。

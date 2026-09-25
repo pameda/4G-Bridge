@@ -10,7 +10,9 @@ import AppKit
 import Foundation
 from PyObjCTools import AppHelper
 
+from fourg_bridge.app.auto_data import AutoDataMonitor
 from fourg_bridge.app.runtime import ModemRuntime
+from fourg_bridge.cellular.data_control import NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.imessage.runner import AppleScriptRunner
 from fourg_bridge.imessage.target import InvalidTarget, normalize_target
@@ -23,7 +25,9 @@ from fourg_bridge.models import (
     RelayStatus,
 )
 from fourg_bridge.modem.usb_discovery import USBDiscovery
+from fourg_bridge.network.failover import Action
 from fourg_bridge.network.traffic import TrafficLedger
+from fourg_bridge.storage.budget import BudgetStore
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
 from fourg_bridge.storage.settings import SettingsStore
@@ -56,6 +60,13 @@ class ApplicationController:
         self._rescan_lock = threading.Lock()
         self._data_busy = False
         self._data_epoch = 0
+        self._budget_stopping = threading.Lock()
+        try:
+            budget = BudgetStore(support / "budget.sqlite")
+        except Exception:
+            budget = None  # Missing/corrupt accounting must never authorize spending.
+        self._auto_data = AutoDataMonitor(self, budget)
+        self._auto_data.start()
         timer_factory = (
             Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_
         )
@@ -74,10 +85,13 @@ class ApplicationController:
         self.rescan()
 
     def workspaceDidSleep_(self, _notification) -> None:
+        self._auto_data.suspended = True
         self._force_data_off("sleep")
 
     def workspaceDidWake_(self, _notification) -> None:
         self._force_data_off("wake")
+        self._auto_data.reset()
+        self._auto_data.suspended = False
         self.rescan()
 
     def rescan(self) -> None:
@@ -187,13 +201,19 @@ class ApplicationController:
     def redetect(self) -> None:
         if self._data_busy:
             return
+        self._auto_data.reset()
         self._start_data_change(False)
 
     def toggle_data(self) -> None:
         if self._data_busy:
             return
         if self._snapshot.data_state == DataState.ON:
+            self._settings = replace(self._settings, auto_data_enabled=False)
+            self._settings_store.save(self._settings)
             self._start_data_change(False)
+            return
+        if not self._auto_data.ready():
+            self._show_alert("流量保护已锁定", "请在设置中手动追加额度；计量异常时请先修复。")
             return
         alert = AppKit.NSAlert.alloc().init()
         alert.setMessageText_("开启 QDC507 4G 数据？")
@@ -207,7 +227,9 @@ class ApplicationController:
             return
         self._start_data_change(True)
 
-    def _start_data_change(self, enabled: bool) -> None:
+    def _start_data_change(self, enabled: bool, *, automatic: bool = False) -> None:
+        if enabled and not self._auto_data.ready():
+            return
         self._data_epoch += 1
         epoch = self._data_epoch
         self._data_busy = False
@@ -223,25 +245,38 @@ class ApplicationController:
         def worker() -> None:
             try:
                 with self._runtime_lock:
-                    transition = self._runtime.set_data(enabled, enabled) if self._runtime else None
-                AppHelper.callAfter(self._data_finished, transition, enabled, epoch)
+                    if enabled:
+                        self._auto_data.sample()  # Baseline before any service enable.
+                    if enabled and (epoch != self._data_epoch or not self._auto_data.ready()):
+                        transition = None
+                    else:
+                        transition = (
+                            self._runtime.set_data(enabled, enabled, automatic=automatic)
+                            if self._runtime
+                            else None
+                        )
+                AppHelper.callAfter(self._data_finished, transition, enabled, epoch, automatic)
             except Exception:
-                AppHelper.callAfter(self._data_finished, None, enabled, epoch)
+                AppHelper.callAfter(self._data_finished, None, enabled, epoch, automatic)
 
         threading.Thread(target=worker, name="Data-Transition", daemon=True).start()
 
-    def _data_finished(self, transition, requested_on: bool, epoch: int) -> None:
-        self._data_busy = False
+    def _data_finished(self, transition, requested_on: bool, epoch: int, automatic=False) -> None:
         if epoch != self._data_epoch:
             self.rescan()
             return
+        self._data_busy = False
         state = transition.current if transition else DataState.PROTECTION_FAILED
         detail = transition.detail if transition else "未发现可控制的 QDC507 服务，请重新检测。"
         failed = requested_on and state != DataState.ON
+        if automatic:
+            self._auto_data.completed(
+                requested_on, state == (DataState.ON if requested_on else DataState.OFF)
+            )
         self._apply_snapshot(
             replace(self._snapshot, data_state=state, warning=detail if failed else None)
         )
-        if failed:
+        if failed and not automatic:
             self._show_alert("4G 未能连接", detail)
         self.rescan()
 
@@ -277,7 +312,32 @@ class ApplicationController:
         try:
             return self._keychain.get_target()
         except KeychainError:
+            self._bridge_status = "钥匙串目标不可读取。请点击“授权读取目标”，完成系统授权后再检查。"
             return None
+
+    def authorize_relay_target(self) -> None:
+        if self._bridge_busy:
+            return
+        self._bridge_busy = True
+        self._bridge_status = "等待系统钥匙串授权；可在系统对话框中取消。不会发送消息。"
+        self._settings_window.refresh(False)
+
+        def worker() -> None:
+            try:
+                target = self._keychain.get_target(allow_interaction=True)
+                status = (
+                    "已授权读取目标，请检查目标格式。" if target else "未保存目标，请填写并保存。"
+                )
+            except Exception:
+                status = "未能获得钥匙串授权。没有发送消息，请重新授权或保存目标。"
+            AppHelper.callAfter(self._target_authorized, status)
+
+        threading.Thread(target=worker, name="Keychain-Authorization", daemon=True).start()
+
+    def _target_authorized(self, status: str) -> None:
+        self._bridge_busy = False
+        self._bridge_status = status
+        self._settings_window.refresh()
 
     def modem_details(self) -> str:
         snapshot = self._snapshot
@@ -425,7 +485,7 @@ class ApplicationController:
                 "（中国大陆为 +86），或有效的 iMessage 邮箱；保存后重新检查。"
             ),
             RelayError.KEYCHAIN_UNAVAILABLE: (
-                "无法读取钥匙串中的转发目标，请解锁钥匙串并重新保存目标。"
+                "无法读取钥匙串目标。请点击“授权读取目标”，完成系统授权后再检查。"
             ),
         }
         return messages.get(result.error, f"AppleScript 执行失败。{result.detail}")
@@ -442,9 +502,94 @@ class ApplicationController:
         AppKit.NSApp.terminate_(None)
 
     def close(self) -> None:
+        self._auto_data.stop.set()
         self._force_data_off("terminate")
         with self._runtime_lock:
             if self._runtime:
                 self._runtime.close()
                 self._runtime = None
         self._timer.invalidate()
+
+    def data_policy(self):
+        monitor = self._auto_data
+        available = monitor.ready()
+        status = monitor.status if self._settings.auto_data_enabled else "自动接管未开启"
+        if not available:
+            status = "流量保护锁定／计量不可用；请手动追加额度或检查计量。"
+        budget = monitor.budget_status
+        used = budget.used if budget else 0
+        return self._settings, used, status
+
+    def save_data_policy(self, enabled: bool, limit_gb: str, monthly: bool) -> bool:
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            value = Decimal(limit_gb)
+            if not value.is_finite() or value <= 0 or value > 10000:
+                raise ValueError
+            limit = int(value * 1_000_000_000)
+            if limit < 1_000_000:
+                raise ValueError
+        except (InvalidOperation, ValueError):
+            self._show_alert("请输入有效上限", "使用 0.001 至 10000 GB；1 GB = 10 亿字节。")
+            return False
+        if self._auto_data.budget is None:
+            self._show_alert("计量数据库不可用", "为防止超额，不能启用；原始计量文件未被覆盖。")
+            return False
+        self._settings = replace(
+            self._settings,
+            auto_data_enabled=enabled,
+            data_limit_bytes=limit,
+            data_budget_period="month" if monthly else "allowance",
+        )
+        self._settings_store.save(self._settings)
+        self._auto_data.reset()
+        # Saving new settings never clears an existing cap latch.
+        if not enabled or not self._auto_data.ready():
+            self._start_data_change(False)
+        return True
+
+    def grant_data_allowance(self):
+        try:
+            self._auto_data.budget.grant(self._settings.data_limit_bytes, user_confirmed=True)
+        except Exception:
+            self._show_alert("无法追加额度", "请先保存有效上限，确认计量数据库可用。")
+            return
+        self._auto_data.error = False
+        self._auto_data.reset()
+        self._settings_window.refresh()
+
+    def auto_data_request(self, action, epoch):
+        if (
+            epoch != self._data_epoch
+            or self._data_busy
+            or self._auto_data.suspended
+            or self._auto_data.stop.is_set()
+            or not self._settings.auto_data_enabled
+        ):
+            return
+        if action == Action.ENABLE and not self._auto_data.ready():
+            return
+        self._start_data_change(action == Action.ENABLE, automatic=True)
+
+    def stop_for_budget(self):
+        """Guard thread: cut ECM without waiting behind SMS/AT/AppleScript."""
+        if not self._budget_stopping.acquire(blocking=False):
+            return
+        try:
+            self._data_epoch += 1
+            runtime = self._runtime
+            if runtime:
+                runtime.cancel_pending_enable()
+            snapshot = self._snapshot
+            if snapshot.network_service:
+                control = NetworkSetupControl(snapshot.interface)
+                control.set_enabled(snapshot.network_service, False)
+        finally:
+            AppHelper.callAfter(self._budget_stopped)
+            self._budget_stopping.release()
+
+    def _budget_stopped(self):
+        if self._snapshot.data_state == DataState.DISABLING:
+            return
+        self._start_data_change(False)

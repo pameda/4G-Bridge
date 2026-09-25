@@ -215,6 +215,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._bridge_status = label("尚未检查 iMessage", 12, True)
         self._check_button = self._button("检查连接", "checkMessages:")
         self._test_button = self._button("发送测试消息…", "sendTest:")
+        self._authorize_button = self._button("授权读取目标", "authorizeTarget:")
         return page(
             "短信转发",
             "短信进入“信息”，正文不留在这里。",
@@ -249,6 +250,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                         stack(
                             [
                                 self._button("保存目标", "saveTarget:"),
+                                self._authorize_button,
                                 self._check_button,
                                 self._test_button,
                             ],
@@ -333,7 +335,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                         section_title("安全连接", "lock.shield"),
                         label(
                             "Wi-Fi 优先；保留现有 VPN 和 DNS 配置。\n"
-                            "启动、重新检测、拔插、睡眠／唤醒和退出后，4G 数据保持关闭。",
+                            "启动／拔插／唤醒先关闭数据；授权自动接管后会重新检测 Wi-Fi。",
                             12,
                             True,
                         ),
@@ -345,6 +347,16 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def _preferences_page(self):
+        self._auto_enabled = AppKit.NSSwitch.alloc().init()
+        self._auto_enabled.setAccessibilityLabel_("Wi-Fi 故障自动接管")
+        self._data_limit = AppKit.NSTextField.alloc().init()
+        self._data_limit.setPlaceholderString_("输入上限")
+        self._data_limit.setAccessibilityLabel_("4G 流量上限 GB")
+        self._data_limit.widthAnchor().constraintEqualToConstant_(110).setActive_(True)
+        self._budget_period = AppKit.NSPopUpButton.alloc().init()
+        self._budget_period.addItemsWithTitles_(["每份额度", "每自然月"])
+        self._policy_status = label("自动接管未开启", 12, True)
+        self._budget_usage = label("尚未设置流量上限", 12, True)
         self._appearance = (
             AppKit.NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
                 ["跟随系统", "浅色", "深色"],
@@ -360,6 +372,37 @@ class SettingsWindowController(AppKit.NSWindowController):
             [
                 group(
                     [
+                        stack(
+                            [
+                                section_title("Wi-Fi 故障自动接管", "wifi.exclamationmark"),
+                                self._auto_enabled,
+                            ],
+                            True,
+                        ),
+                        stack(
+                            [
+                                label("4G 上限", 12),
+                                self._data_limit,
+                                label("GB", 12, True),
+                                self._budget_period,
+                                self._button("保存策略…", "saveDataPolicy:"),
+                            ],
+                            True,
+                        ),
+                        self._budget_usage,
+                        self._policy_status,
+                        label(
+                            "连续 3 次断网检测后接管；Wi-Fi 恢复后关闭 4G。VPN 存在时暂缓。\n"
+                            "到顶锁定，重启或跨月不会解锁。手动追加相同额度后才能继续。\n"
+                            "本机计量，非运营商账单；采样和断开存在延迟，可能超额。",
+                            11,
+                            True,
+                        ),
+                        self._button("手动追加一份额度…", "grantData:"),
+                    ]
+                ),
+                group(
+                    [
                         section_title("外观", "circle.lefthalf.filled"),
                         self._appearance,
                         label("使用 macOS 系统字体、语义色和原生控件。", 12, True),
@@ -370,32 +413,11 @@ class SettingsWindowController(AppKit.NSWindowController):
                         section_title("隐私保护", "hand.raised"),
                         label(
                             "短信正文不写入数据库或普通日志，诊断号码自动脱敏。\n"
-                            "不访问 Messages 数据库，不申请辅助功能或完全磁盘访问。\n"
-                            "不抓包，不记录域名，也不统计应用级流量。",
-                            13,
+                            "不访问 Messages 数据库，不抓包，不申请完全磁盘访问。",
+                            11,
                             True,
                         ),
-                    ]
-                ),
-                group(
-                    [
-                        stack(
-                            [
-                                symbol("antenna.radiowaves.left.and.right", 32),
-                                stack(
-                                    [
-                                        label("4G Bridge", 20, weight=AppKit.NSFontWeightSemibold),
-                                        label(
-                                            f"版本 {__version__} · Apple Silicon · QDC507", 12, True
-                                        ),
-                                    ],
-                                    spacing=5,
-                                ),
-                            ],
-                            True,
-                            16,
-                        ),
-                        label("本机运行 · 无云服务器 · 默认关闭 SIM 数据", 12, True),
+                        label(f"4G Bridge {__version__} · Apple Silicon · QDC507", 11, True),
                     ]
                 ),
             ],
@@ -403,6 +425,19 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def refresh(self, include_target=True):
+        settings, used, policy_status = self._delegate.data_policy()
+        if include_target:
+            self._auto_enabled.setState_(int(settings.auto_data_enabled))
+            self._data_limit.setStringValue_(
+                f"{settings.data_limit_bytes / 1_000_000_000:g}"
+                if settings.data_limit_bytes
+                else ""
+            )
+            self._budget_period.selectItemAtIndex_(int(settings.data_budget_period == "month"))
+        self._policy_status.setStringValue_(policy_status)
+        self._budget_usage.setStringValue_(
+            f"当前额度已用 {format_bytes(used)} / {format_bytes(settings.data_limit_bytes)}"
+        )
         self._enabled.setState_(int(self._delegate.relay_enabled()))
         if include_target:
             self._loaded_target = self._delegate.relay_target() or ""
@@ -411,6 +446,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._bridge_status.setStringValue_(bridge_status)
         self._check_button.setEnabled_(not busy)
         self._test_button.setEnabled_(not busy)
+        self._authorize_button.setEnabled_(not busy)
         snapshot = self._delegate.current_snapshot()
         state = snapshot.data_state
         self._connection.setStringValue_(connection_title(snapshot))
@@ -545,6 +581,33 @@ class SettingsWindowController(AppKit.NSWindowController):
         )
 
     @objc.IBAction
+    def saveDataPolicy_(self, _sender):
+        enabled = bool(self._auto_enabled.state())
+        if enabled and not self._confirm(
+            "允许 Wi-Fi 故障时自动使用 SIM 流量？",
+            "将每 15 秒对 Apple／Microsoft 的连接测试地址进行绑定 Wi-Fi 的轻量检查。"
+            "连续失败后临时提高 QDC507 优先级，恢复后还原。"
+            "网卡无法恢复时，最多重启模块一次，可能短暂中断短信接收；失败即暂停。"
+            "仅在应用运行时保护流量；不会更改 VPN、DNS 或 Wi-Fi 开关。",
+        ):
+            return
+        if self._delegate.save_data_policy(
+            enabled,
+            str(self._data_limit.stringValue()),
+            self._budget_period.indexOfSelectedItem() == 1,
+        ):
+            self.refresh()
+
+    @objc.IBAction
+    def grantData_(self, _sender):
+        if self._confirm(
+            "追加一份 4G 额度？",
+            "将解除限额锁定，并按已保存的上限追加同等额度，不会清除今日／本月流量。"
+            "自动接管开启时，断网后可再次使用 SIM 流量。",
+        ):
+            self._delegate.grant_data_allowance()
+
+    @objc.IBAction
     def relayChanged_(self, _sender):
         self._delegate.set_relay_enabled(self._enabled.state() == AppKit.NSControlStateValueOn)
         self.refresh(False)
@@ -568,6 +631,10 @@ class SettingsWindowController(AppKit.NSWindowController):
     def checkMessages_(self, _sender):
         if self._target_saved():
             self._delegate.check_messages()
+
+    @objc.IBAction
+    def authorizeTarget_(self, _sender):
+        self._delegate.authorize_relay_target()
 
     @objc.python_method
     def _confirm(self, title, detail):

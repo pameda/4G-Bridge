@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 
@@ -10,11 +11,12 @@ class KeychainError(RuntimeError):
 class KeychainStore:
     SERVICE = "com.pameda.fourgbridge"
     ACCOUNT = "imessage-relay-target"
+    _interaction_lock = threading.RLock()
 
     def __init__(self, security: Any | None = None) -> None:
         self._security = security
 
-    def get_target(self) -> str | None:
+    def get_target(self, *, allow_interaction: bool = False) -> str | None:
         security = self._framework()
         query = {
             security.kSecClass: security.kSecClassGenericPassword,
@@ -23,7 +25,26 @@ class KeychainStore:
             security.kSecReturnData: True,
             security.kSecMatchLimit: security.kSecMatchLimitOne,
         }
-        status, result = security.SecItemCopyMatching(query, None)
+        if not allow_interaction:
+            query[security.kSecUseAuthenticationUI] = security.kSecUseAuthenticationUIFail
+        # Legacy login-keychain ACL prompts do not honor the data-protection
+        # kSecUseAuthenticationUI key on every macOS version. Serialize the
+        # process-wide legacy flag and never let a background read wait for UI.
+        if not self._interaction_lock.acquire(blocking=allow_interaction):
+            raise KeychainError("Keychain authorization is busy")
+        try:
+            status, previous = security.SecKeychainGetUserInteractionAllowed(None)
+            if status != security.errSecSuccess:
+                raise KeychainError("Cannot read keychain interaction policy")
+            status = security.SecKeychainSetUserInteractionAllowed(allow_interaction)
+            if status != security.errSecSuccess:
+                raise KeychainError("Cannot set keychain interaction policy")
+            try:
+                status, result = security.SecItemCopyMatching(query, None)
+            finally:
+                security.SecKeychainSetUserInteractionAllowed(previous)
+        finally:
+            self._interaction_lock.release()
         if status == security.errSecItemNotFound:
             return None
         if status != security.errSecSuccess:
