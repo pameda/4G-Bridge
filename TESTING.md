@@ -8,7 +8,7 @@
 ./script/test.sh
 ```
 
-门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。当前结果为 50 passed，整体覆盖率 88.96%（四舍五入 89%），核心业务模块覆盖率 95%；门槛分别为 80% 与 90%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过 `.app` 启动与系统集成检查验证。
+门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。0.1.1 本机结果为 61 passed，整体覆盖率 89.43%，核心业务模块覆盖率 95%；门槛分别为 80% 与 90%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过真实打包 UI 检查验证。
 
 GitHub Actions 的 `main` 与 `v0.1.0` 工作流均已通过；tag 工作流在官方 arm64 macOS runner 上重新安装锁定依赖、重跑门禁、生成并发布 DMG。
 
@@ -20,7 +20,21 @@ GitHub Actions 的 `main` 与 `v0.1.0` 工作流均已通过；tag 工作流在�
 
 `./script/build_and_run.sh --package` 额外生成 DMG，挂载只读验证后输出 SHA-256。
 
-本机安全启动测试已在未插 QDC507 时执行：进程保持运行、菜单栏 app 以 UIElement 注册，没有 Python traceback 或崩溃。系统 AppIntents 服务在当前 macOS 预览系统上输出非致命注册噪声，不影响应用运行。
+旧版仅检查进程存在，曾漏掉 py2app 启动错误。0.1.1 构建增加实际二进制 `--ui-smoke`：不访问 USB、Keychain 或短信，构造真实菜单及四个设置页，渲染深浅色截图，要求明确完成标记，且不允许 Python traceback 或布局冲突。另执行正常应用启动和界面检查。
+
+## 0.1.1 上网故障与界面验收
+
+- 发现并修复 `(*)` 禁用服务解析错误：它曾把 QDC507 错绑到上一块网卡。
+- 删除通用 USB Ethernet 猜测匹配；回归覆盖 en9 普通网卡与 en11 模块并存。
+- 禁止普通 AT 连接发送 USB SET_CONFIGURATION，且不探测 CDC 数据接口。
+- 修复 DHCP 实际输出 `router (ip_mult)` 的网关解析；无地址/网关时不报成功。
+- 发现同时运行的 DJI4GMenuBar 与 AT 辅助进程，已正常退出以隔离测试；应用新增冲突提示。
+- 本机 macOS/QDC507 组合中，即使无控制器占用，networksetup 关闭再开启仍可复现 ECM inactive；增加停机等待也未恢复。模块重启后可正常取得地址。
+- 新增仅在用户确认开启后的有界恢复，实测从失活状态恢复为 ON，获得模块私网地址和网关，经 en11 完成 HTTPS 200，返回正文约 1 KB，最后验证 OFF。
+- 首个 1.1.1.1 HTTP 探测超时；不能把单一探测点失败当成整个 4G 不可用。随后通过绑定 en11、固定服务器地址并校验 TLS 的 HTTPS 请求验证成功。
+- 默认路由仍为现有 VPN 的 utun4，Wi-Fi 服务仍第一；这不等于已测试关闭 Wi-Fi 后的 VPN 底层出口切换，该项仍待验收。
+- 新界面使用原生 NSTabViewController 工具栏、系统开关、语义色和自动布局；检查四个页面、深浅色和完整原生窗口截图，未见裁切。
+- 未发送 iMessage、未读取短信正文、未删除短信。睡眠/唤醒、完整断网切换和短信端到端验收仍未执行。
 
 ## 2026-09-25 QDC507 实机结果
 

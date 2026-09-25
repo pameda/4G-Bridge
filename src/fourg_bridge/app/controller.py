@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import suppress
 from dataclasses import replace
 from importlib import resources
 from pathlib import Path
@@ -38,6 +39,8 @@ class ApplicationController:
         self._menu = MenuBarController.alloc().initWithDelegate_(self)
         self._settings_window = SettingsWindowController.alloc().initWithDelegate_(self)
         self._rescan_lock = threading.Lock()
+        self._data_busy = False
+        self._data_epoch = 0
         timer_factory = (
             Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_
         )
@@ -69,6 +72,20 @@ class ApplicationController:
 
     def _rescan_worker(self) -> None:
         try:
+            conflicts = [
+                app.localizedName()
+                for app in AppKit.NSWorkspace.sharedWorkspace().runningApplications()
+                if app.bundleIdentifier() in ("com.pantao.dji4g-menubar",)
+            ]
+            if conflicts:
+                AppHelper.callAfter(
+                    self._apply_snapshot,
+                    ModemSnapshot(
+                        device_state=DeviceState.ERROR,
+                        warning="请先退出 DJI 4G 控制器，避免两个应用同时控制模块。",
+                    ),
+                )
+                return
             descriptor = self._discovery.discover()
             with self._runtime_lock:
                 if descriptor is None:
@@ -91,9 +108,14 @@ class ApplicationController:
                             AppHelper.callAfter(self._menu.setRelayStatus_recent_, True, recent)
             AppHelper.callAfter(self._apply_snapshot, snapshot)
         except Exception as error:
+            with self._runtime_lock:
+                if self._runtime:
+                    with suppress(Exception):
+                        self._runtime.close()
+                    self._runtime = None
             snapshot = ModemSnapshot(
                 device_state=DeviceState.ERROR,
-                data_state=DataState.OFF,
+                data_state=DataState.PROTECTION_FAILED,
                 warning=type(error).__name__,
             )
             AppHelper.callAfter(self._apply_snapshot, snapshot)
@@ -101,34 +123,84 @@ class ApplicationController:
             self._rescan_lock.release()
 
     def _apply_snapshot(self, snapshot: ModemSnapshot) -> None:
+        if self._data_busy:
+            snapshot = replace(snapshot, data_state=self._snapshot.data_state)
         previously_connected = self._snapshot.descriptor is not None
         self._snapshot = snapshot
         if previously_connected and snapshot.descriptor is None:
             self._force_data_off("USB disconnect")
         self._menu.update_(snapshot)
+        if self._settings_window.window().isVisible():
+            self._settings_window.refresh(False)
+
+    def current_snapshot(self) -> ModemSnapshot:
+        return self._snapshot
+
+    def redetect(self) -> None:
+        if self._data_busy:
+            return
+        self._start_data_change(False)
 
     def toggle_data(self) -> None:
+        if self._data_busy:
+            return
         if self._snapshot.data_state == DataState.ON:
-            self._force_data_off("user")
+            self._start_data_change(False)
             return
         alert = AppKit.NSAlert.alloc().init()
         alert.setMessageText_("开启 QDC507 4G 数据？")
         alert.setInformativeText_(
-            "此操作可能产生 SIM 流量费用。4G Bridge 不会修改 DNS、VPN 或静态路由。"
+            "会使用 SIM 流量。若模块无法取得网络地址，将重启模块一次后重试，"
+            "恢复可能需要约两分钟。Wi-Fi 可用时优先使用 Wi-Fi。"
         )
         alert.addButtonWithTitle_("开启")
         alert.addButtonWithTitle_("取消")
         if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
             return
-        with self._runtime_lock:
-            transition = self._runtime.set_data(True, True) if self._runtime else None
-        if transition is None or transition.current != DataState.ON:
-            self._show_alert("尚未发现可安全控制的 QDC507 网络服务", "请确认模块已连接并重新检测。")
+        self._start_data_change(True)
+
+    def _start_data_change(self, enabled: bool) -> None:
+        self._data_epoch += 1
+        epoch = self._data_epoch
+        self._data_busy = False
+        self._apply_snapshot(
+            replace(
+                self._snapshot,
+                warning=None,
+                data_state=DataState.ENABLING if enabled else DataState.DISABLING,
+            )
+        )
+        self._data_busy = True
+
+        def worker() -> None:
+            try:
+                with self._runtime_lock:
+                    transition = self._runtime.set_data(enabled, enabled) if self._runtime else None
+                AppHelper.callAfter(self._data_finished, transition, enabled, epoch)
+            except Exception:
+                AppHelper.callAfter(self._data_finished, None, enabled, epoch)
+
+        threading.Thread(target=worker, name="Data-Transition", daemon=True).start()
+
+    def _data_finished(self, transition, requested_on: bool, epoch: int) -> None:
+        self._data_busy = False
+        if epoch != self._data_epoch:
+            self.rescan()
             return
-        self._snapshot = replace(self._snapshot, data_state=transition.current)
-        self._menu.update_(self._snapshot)
+        state = transition.current if transition else DataState.PROTECTION_FAILED
+        detail = transition.detail if transition else "未发现可控制的 QDC507 服务，请重新检测。"
+        failed = requested_on and state != DataState.ON
+        self._apply_snapshot(
+            replace(self._snapshot, data_state=state, warning=detail if failed else None)
+        )
+        if failed:
+            self._show_alert("4G 未能连接", detail)
+        self.rescan()
 
     def _force_data_off(self, _reason: str) -> None:
+        self._data_epoch += 1
+        if self._runtime:
+            self._runtime.cancel_pending_enable()
         with self._runtime_lock:
             transition = self._runtime.force_safe_off() if self._runtime else None
         state = transition.current if transition else DataState.OFF
@@ -177,16 +249,11 @@ class ApplicationController:
             (
                 f"USB：{usb}  {product}",
                 f"模块：{snapshot.modem_identity or '—'}",
-                f"USB 配置：{snapshot.usb_configuration or '—'}",
                 f"SIM：{snapshot.sim_state.value.upper()}",
-                f"ICCID：{redact_identifier(snapshot.iccid)}",
-                f"号码：{redact_identifier(snapshot.phone_number)}",
                 f"运营商 / RAT：{snapshot.operator or '—'} / {snapshot.rat or '—'}",
                 f"接口 / 服务：{snapshot.interface or '—'} / {snapshot.network_service or '—'}",
                 f"IPv4 / 网关：{snapshot.ipv4 or '—'} / {snapshot.gateway or '—'}",
                 f"默认接口 / VPN：{snapshot.default_interface or '—'} / {vpn}",
-                "Wi‑Fi 与 4G 同时连接时默认流量优先走 Wi‑Fi。",
-                "4G 数据在启动、重连、睡眠、唤醒及退出时保持关闭。",
             )
         )
 

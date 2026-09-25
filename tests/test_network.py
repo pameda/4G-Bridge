@@ -87,6 +87,40 @@ def test_detector_prefers_qdc507_over_generic_usb_ethernet(monkeypatch) -> None:
     assert interface.service == "EG25G-QDC507 2"
 
 
+def test_disabled_services_do_not_inherit_previous_adapter() -> None:
+    output = (
+        "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n"
+        "(*) USB LAN\n(Hardware Port: USB LAN, Device: en9)\n"
+        "(*) EG25G-QDC507\n(Hardware Port: EG25G-QDC507, Device: en10)\n"
+        "(*) EG25G-QDC507 2\n(Hardware Port: EG25G-QDC507, Device: en11)\n"
+        "(2) VPN\n(Hardware Port: VPN, Device: )\n"
+    )
+    assert parse_service_order(output) == {
+        "en0": "Wi-Fi",
+        "en9": "USB LAN",
+        "en10": "EG25G-QDC507",
+        "en11": "EG25G-QDC507 2",
+    }
+    assert [name for name, _ in parse_ordered_services(output)] == [
+        "Wi-Fi",
+        "USB LAN",
+        "EG25G-QDC507",
+        "EG25G-QDC507 2",
+        "VPN",
+    ]
+
+
+def test_generic_ethernet_never_selected_as_modem(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ECMDetector,
+        "_run",
+        lambda *a, **k: MIXED_HARDWARE.split("Hardware Port: EG25G")[0]
+        if "-listallhardwareports" in a
+        else MIXED_ORDER,
+    )
+    assert ECMDetector().discover() is None
+
+
 class Network:
     def __init__(self, works=True):
         self.enabled = True
@@ -177,6 +211,63 @@ def test_counter_parser_and_reset(monkeypatch) -> None:
     monitor.reset_session()
 
 
+def test_missing_dhcp_rolls_back_and_does_not_report_on() -> None:
+    class NoAddress(Network):
+        def wait_ready(self):
+            return False
+
+    network = NoAddress()
+    result = DataSessionManager("QDC507", network, Modem()).set_enabled(True, True)
+    assert result.current == DataState.OFF and result.protected
+    assert not network.enabled
+    assert "IP" in result.detail
+
+
+def test_data_exception_rolls_back_and_off_fallback_is_honest() -> None:
+    class BrokenNetwork(Network):
+        def set_enabled(self, service, enabled):
+            raise TimeoutError
+
+    class BrokenModem(Modem):
+        def set_attached(self, attached):
+            raise TimeoutError
+
+    manager = DataSessionManager("QDC507", BrokenNetwork(), BrokenModem())
+    result = manager.set_enabled(True, True)
+    assert result.current == DataState.PROTECTION_FAILED
+    assert not result.protected
+
+
+def test_wait_ready_rejects_self_assigned_address(monkeypatch) -> None:
+    addresses = iter(("169.254.2.3", "192.168.225.20"))
+    monkeypatch.setattr(ECMDetector, "ipv4", lambda _: next(addresses))
+    monkeypatch.setattr(ECMDetector, "gateway", lambda _: "192.168.225.1")
+    monkeypatch.setattr("fourg_bridge.cellular.data_control.time.sleep", lambda _: None)
+    assert NetworkSetupControl("en11").wait_ready()
+    assert not NetworkSetupControl().wait_ready()
+    assert not NetworkSetupControl("en11").wait_ready(timeout=0)
+
+
+def test_real_macos_dhcp_gateway_format(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ECMDetector,
+        "_run",
+        lambda *a, **kw: (
+            "router (ip_mult): {192.168.225.1}\n" if "getpacket" in a else "interface: utun4\n"
+        ),
+    )
+    assert ECMDetector.gateway("en11") == "192.168.225.1"
+
+
+def test_attached_modem_is_not_reattached() -> None:
+    class AT:
+        def transact(self, command, timeout):
+            assert command == "AT+CGATT?"
+            return ATResponse(("+CGATT: 1",), "OK")
+
+    assert ModemAttachControl(AT()).set_attached(True)
+
+
 def test_networksetup_and_attach_controls(monkeypatch) -> None:
     class Result:
         returncode = 0
@@ -196,9 +287,9 @@ def test_networksetup_and_attach_controls(monkeypatch) -> None:
         if "-listnetworkserviceorder" in arguments:
             if reordered:
                 return Result(
-                    "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n"
-                    "(2) Baiwang\n(Hardware Port: Baiwang QDC507, Device: en9)\n"
-                    "(3) VPN\n(Hardware Port: VPN, Device: utun4)\n"
+                    "(1) VPN\n(Hardware Port: VPN, Device: utun4)\n"
+                    "(2) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n"
+                    "(3) Baiwang\n(Hardware Port: Baiwang QDC507, Device: en9)\n"
                 )
             return Result(
                 "(1) Baiwang\n(Hardware Port: Baiwang QDC507, Device: en9)\n"
@@ -222,9 +313,9 @@ def test_networksetup_and_attach_controls(monkeypatch) -> None:
     assert [
         "/usr/sbin/networksetup",
         "-ordernetworkservices",
+        "VPN",
         "Wi-Fi",
         "Baiwang",
-        "VPN",
     ] in calls
     assert control.set_enabled("Baiwang", False)
     assert not control.is_enabled("Baiwang")

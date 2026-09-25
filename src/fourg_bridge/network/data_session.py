@@ -12,6 +12,7 @@ class DataTransition:
     current: DataState
     protected: bool
     detail: str = ""
+    code: str = ""
 
 
 class NetworkServiceControl(Protocol):
@@ -50,11 +51,38 @@ class DataSessionManager:
             if callable(ensure_priority) and not ensure_priority(self._service):
                 self._state = DataState.PROTECTION_FAILED
                 return DataTransition(previous, self._state, False, "Wi-Fi priority check failed")
-            attached = self._modem.set_attached(True)
-            service_enabled = self._network.set_enabled(self._service, True)
-            verified = service_enabled and self._network.is_enabled(self._service)
-            verify_default = getattr(self._network, "verify_wifi_default", None)
-            wifi_is_default = not callable(verify_default) or verify_default()
+            try:
+                attached = self._modem.set_attached(True)
+                service_enabled = attached and self._network.set_enabled(self._service, True)
+                verified = service_enabled and self._network.is_enabled(self._service)
+                ready = getattr(self._network, "wait_ready", None)
+                link_ready = verified and (not callable(ready) or ready())
+                verify_default = getattr(self._network, "verify_wifi_default", None)
+                wifi_is_default = not callable(verify_default) or verify_default()
+            except Exception:
+                rollback = self.force_safe_off()
+                return DataTransition(
+                    previous,
+                    rollback.current,
+                    rollback.protected,
+                    "连接操作超时或失败，已尝试关闭 4G。",
+                )
+            if not (attached and verified and link_ready):
+                rollback = self.force_safe_off()
+                detail = (
+                    "模块未能附着蜂窝网络，请检查 SIM 和注册状态。"
+                    if not attached
+                    else "macOS 未能启用 QDC507 网络服务。"
+                    if not verified
+                    else "QDC507 未取得有效 IP 或网关，已关闭数据。请重新插拔模块后重试。"
+                )
+                return DataTransition(
+                    previous,
+                    rollback.current,
+                    rollback.protected,
+                    detail,
+                    "network_not_ready" if attached and verified else "enable_failed",
+                )
             if attached and verified and not wifi_is_default:
                 disabled = self._network.set_enabled(self._service, False)
                 service_off = disabled and not self._network.is_enabled(self._service)
@@ -77,12 +105,18 @@ class DataSessionManager:
             return DataTransition(previous, self._state, verified, detail)
 
         self._state = DataState.DISABLING
-        disabled = self._network.set_enabled(self._service, False)
-        verified = disabled and not self._network.is_enabled(self._service)
+        try:
+            disabled = self._network.set_enabled(self._service, False)
+            verified = disabled and not self._network.is_enabled(self._service)
+        except Exception:
+            verified = False
         if verified:
             self._state = DataState.OFF
             return DataTransition(previous, self._state, True, "network service disabled")
-        detached = self._modem.set_attached(False)
+        try:
+            detached = self._modem.set_attached(False)
+        except Exception:
+            detached = False
         self._state = DataState.OFF if detached else DataState.PROTECTION_FAILED
         return DataTransition(
             previous,

@@ -42,9 +42,9 @@ class USBSessionFactory:
 
     def connect(self, descriptor: DeviceDescriptor) -> USBModemSession:
         device = self._discovery.open_device(descriptor)
-        with suppress(Exception):
-            device.set_configuration()
-            # The ECM function may already own the active configuration.
+        # SET_CONFIGURATION resets every function of this composite device,
+        # including the ECM function owned by macOS. Never reset a live device.
+        device.get_active_configuration()
         endpoints = self._discovery.scan_bulk_endpoints(device)
         errors: list[str] = []
         for pair in endpoints:

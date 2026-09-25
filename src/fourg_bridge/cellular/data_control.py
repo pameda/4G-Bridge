@@ -2,12 +2,31 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 
 from fourg_bridge.modem.at_transport import ATTransport
-from fourg_bridge.network.ecm import parse_hardware_ports, parse_ordered_services
+from fourg_bridge.network.ecm import ECMDetector, parse_hardware_ports, parse_ordered_services
 
 
 class NetworkSetupControl:
+    def __init__(self, interface: str | None = None) -> None:
+        self._interface = interface
+
+    def wait_ready(self, timeout: float = 20) -> bool:
+        if self._interface is None:
+            return False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            address = ECMDetector.ipv4(self._interface)
+            if (
+                address
+                and not address.startswith("169.254.")
+                and ECMDetector.gateway(self._interface)
+            ):
+                return True
+            time.sleep(1)
+        return False
+
     def ensure_wifi_precedes(self, service: str) -> bool:
         completed = subprocess.run(
             ["/usr/sbin/networksetup", "-listnetworkserviceorder"],
@@ -34,9 +53,8 @@ class NetworkSetupControl:
         modem_index = names.index(service)
         if wifi_index < modem_index:
             return True
-        names.pop(wifi_index)
-        modem_index = names.index(service)
-        names.insert(modem_index, wifi)
+        names.pop(modem_index)
+        names.insert(names.index(wifi) + 1, service)
         reordered = subprocess.run(
             ["/usr/sbin/networksetup", "-ordernetworkservices", *names],
             capture_output=True,
@@ -137,4 +155,9 @@ class ModemAttachControl:
         self._transport = transport
 
     def set_attached(self, attached: bool) -> bool:
+        status = self._transport.transact("AT+CGATT?", timeout=5)
+        if status.ok and any(
+            re.fullmatch(r"\+CGATT:\s*" + str(int(attached)), line.strip()) for line in status.lines
+        ):
+            return True
         return self._transport.transact(f"AT+CGATT={1 if attached else 0}", timeout=15).ok

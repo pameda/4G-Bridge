@@ -37,7 +37,7 @@ def parse_service_order(output: str) -> dict[str, str]:
     result: dict[str, str] = {}
     current: str | None = None
     for line in output.splitlines():
-        match = re.match(r"\(\d+\)\s+(.+)$", line.strip())
+        match = re.match(r"\((?:\d+|\*)\)\s+(.+)$", line.strip())
         if match:
             current = match.group(1).lstrip("*").strip()
             continue
@@ -51,7 +51,7 @@ def parse_ordered_services(output: str) -> tuple[tuple[str, str | None], ...]:
     result: list[tuple[str, str | None]] = []
     current_name: str | None = None
     for line in output.splitlines():
-        match = re.match(r"\(\d+\)\s+(.+)$", line.strip())
+        match = re.match(r"\((?:\d+|\*)\)\s+(.+)$", line.strip())
         if match:
             current_name = match.group(1).lstrip("*").strip()
             result.append((current_name, None))
@@ -64,7 +64,6 @@ def parse_ordered_services(output: str) -> tuple[tuple[str, str | None], ...]:
 
 class ECMDetector:
     SPECIFIC_MODEM_HINTS = ("baiwang", "qdc507", "ec25", "eg25g")
-    GENERIC_MODEM_HINTS = ("usb 10/100", "usb ethernet")
 
     def discover(self) -> NetworkInterface | None:
         ports = parse_hardware_ports(self._run("/usr/sbin/networksetup", "-listallhardwareports"))
@@ -78,15 +77,18 @@ class ECMDetector:
             )
             for port in ports
         )
-        for hints in (self.SPECIFIC_MODEM_HINTS, self.GENERIC_MODEM_HINTS):
-            for port, haystack in candidates:
-                if any(hint in haystack for hint in hints):
-                    return NetworkInterface(
-                        port.hardware_port,
-                        port.device,
-                        port.ethernet_address,
-                        services.get(port.device),
-                    )
+        matches = [
+            port
+            for port, haystack in candidates
+            if any(hint in haystack for hint in self.SPECIFIC_MODEM_HINTS)
+        ]
+        # A generic Ethernet adapter is never sufficient evidence for a modem.
+        # Multiple live modem candidates require explicit disambiguation.
+        if len(matches) == 1:
+            port = matches[0]
+            return NetworkInterface(
+                port.hardware_port, port.device, port.ethernet_address, services.get(port.device)
+            )
         return None
 
     @staticmethod
@@ -106,7 +108,7 @@ class ECMDetector:
     def gateway(interface: str) -> str | None:
         packet = ECMDetector._run("/usr/sbin/ipconfig", "getpacket", interface, allow_failure=True)
         match = re.search(
-            r"router_identifier[^:]*:\s*(?:\{\s*)?(\d{1,3}(?:\.\d{1,3}){3})",
+            r"(?:router_identifier|router)\s*\([^)]*\)\s*:\s*(?:\{\s*)?(\d{1,3}(?:\.\d{1,3}){3})",
             packet,
         )
         if match:

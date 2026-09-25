@@ -23,16 +23,36 @@ class MenuBarController(AppKit.NSObject):
         return self
 
     def _build_menu(self) -> None:
-        heading = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "4G Bridge", None, ""
-        )
-        heading.setEnabled_(False)
+        self._menu.setAutoenablesItems_(False)
+        heading = AppKit.NSMenuItem.sectionHeaderWithTitle_("4G Bridge")
         self._menu.addItem_(heading)
         self._add_value("device", "QDC507", "未连接")
-        self._add_value("usb", "USB", "—")
         self._add_value("operator", "运营商", "—")
-        self._add_value("sim", "SIM", "未知")
         self._add_value("signal", "信号", "—")
+        self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        self._add_value("connection", "4G 数据", "已关闭")
+        data = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "开启 4G 数据…", "toggleData:", ""
+        )
+        data.setTarget_(self)
+        self._menu.addItem_(data)
+        self._values["data"] = data
+        self._add_value("traffic", "今日流量", "—")
+        self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        self._add_value("relay", "短信转发", "未开启")
+        self._add_value("recent", "最近转发", "—")
+        self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        parent = self._menu
+        detail_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "连接详情", None, ""
+        )
+        detail_menu = AppKit.NSMenu.alloc().initWithTitle_("连接详情")
+        detail_menu.setAutoenablesItems_(False)
+        detail_item.setSubmenu_(detail_menu)
+        parent.addItem_(detail_item)
+        self._menu = detail_menu
+        self._add_value("usb", "USB", "—")
+        self._add_value("sim", "SIM", "未知")
         self._add_value("registration", "LTE", "未注册")
         self._add_value("rat", "RAT", "—")
         self._add_value("interface", "接口", "—")
@@ -43,25 +63,14 @@ class MenuBarController(AppKit.NSObject):
         self._add_value("download", "当前下载", "—")
         self._add_value("upload", "当前上传", "—")
         self._add_value("session", "本次连接", "—")
-        self._add_value("traffic", "今日流量", "—")
         self._add_value("month", "本月流量", "—")
-        self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
-
-        data = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "开启 4G 数据…", "toggleData:", ""
-        )
-        data.setTarget_(self)
-        self._menu.addItem_(data)
-        self._values["data"] = data
-
-        self._add_value("relay", "iMessage 转发", "未开启")
-        self._add_value("recent", "最近转发", "—")
-        self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
-        self._add_action("重新检测模块", "rescan:")
+        self._menu = parent
         self._add_action("设置…", "showSettings:", ",")
+        self._add_action("重新检测模块", "rescan:")
         self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self._add_action("退出 4G Bridge", "quit:", "q")
 
+    @objc.python_method
     def _add_value(self, key: str, label: str, value: str) -> None:
         item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             f"{label}  {value}", None, ""
@@ -71,6 +80,7 @@ class MenuBarController(AppKit.NSObject):
         self._menu.addItem_(item)
         self._values[key] = item
 
+    @objc.python_method
     def _add_action(self, title: str, action: str, key: str = "") -> None:
         item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, key)
         item.setTarget_(self)
@@ -102,10 +112,32 @@ class MenuBarController(AppKit.NSObject):
             "usb",
             f"{descriptor.vendor_id:04X}:{descriptor.product_id:04X}" if descriptor else "—",
         )
-        self._set("operator", snapshot.operator or "—")
-        self._set("sim", snapshot.sim_state.value.upper())
+        self._set(
+            "operator",
+            {"CHN-CT": "中国电信", "CHINA MOBILE": "中国移动", "CHN-UNICOM": "中国联通"}.get(
+                snapshot.operator, snapshot.operator or "—"
+            ),
+        )
+        self._set(
+            "sim",
+            {
+                "ready": "已就绪",
+                "missing": "未插卡",
+                "not_ready": "未就绪",
+                "pin_required": "需要 PIN",
+            }.get(snapshot.sim_state.value, "未知"),
+        )
         self._set("signal", f"{snapshot.rssi_dbm} dBm" if snapshot.rssi_dbm is not None else "—")
-        self._set("registration", snapshot.registration.value)
+        self._set(
+            "registration",
+            {
+                "registered_home": "已注册",
+                "registered_roaming": "漫游",
+                "searching": "搜索中",
+                "denied": "注册被拒绝",
+                "not_registered": "未注册",
+            }.get(snapshot.registration.value, "未知"),
+        )
         self._set("rat", snapshot.rat or "—")
         self._set("interface", snapshot.interface or "—")
         self._set("ip", snapshot.ipv4 or "—")
@@ -114,6 +146,31 @@ class MenuBarController(AppKit.NSObject):
         self._set("vpn", "已连接" if snapshot.vpn_active else "未连接")
         self._values["data"].setTitle_(
             "关闭 4G 数据" if snapshot.data_state == DataState.ON else "开启 4G 数据…"
+        )
+        state = snapshot.data_state
+        self._set(
+            "connection",
+            {
+                DataState.OFF: "已关闭",
+                DataState.ON: "已开启 · Wi-Fi 优先",
+                DataState.ENABLING: "正在连接…",
+                DataState.DISABLING: "正在关闭…",
+                DataState.PROTECTION_FAILED: "保护失败",
+            }[state],
+        )
+        self._values["data"].setEnabled_(
+            snapshot.descriptor is not None
+            and state not in (DataState.ENABLING, DataState.DISABLING)
+        )
+        button.setToolTip_(
+            "4G Bridge · "
+            + (
+                snapshot.warning
+                or {
+                    DataState.OFF: "4G 数据已关闭",
+                    DataState.ON: "4G 数据已开启",
+                }.get(state, "正在连接")
+            )
         )
 
     @objc.python_method
@@ -145,7 +202,7 @@ class MenuBarController(AppKit.NSObject):
 
     @objc.IBAction
     def rescan_(self, _sender):
-        self._delegate.rescan()
+        self._delegate.redetect()
 
     @objc.IBAction
     def showSettings_(self, _sender):

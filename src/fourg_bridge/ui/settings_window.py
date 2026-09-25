@@ -4,133 +4,313 @@ import AppKit
 import objc
 
 
+def label(text, size=13, secondary=False, weight=None):
+    view = AppKit.NSTextField.wrappingLabelWithString_(text)
+    view.setFont_(
+        AppKit.NSFont.systemFontOfSize_weight_(
+            size, AppKit.NSFontWeightRegular if weight is None else weight
+        )
+    )
+    view.setTextColor_(
+        AppKit.NSColor.secondaryLabelColor() if secondary else AppKit.NSColor.labelColor()
+    )
+    return view
+
+
+def stack(views, horizontal=False, spacing=12):
+    view = AppKit.NSStackView.stackViewWithViews_(views)
+    view.setOrientation_(
+        AppKit.NSUserInterfaceLayoutOrientationHorizontal
+        if horizontal
+        else AppKit.NSUserInterfaceLayoutOrientationVertical
+    )
+    view.setAlignment_(
+        AppKit.NSLayoutAttributeCenterY if horizontal else AppKit.NSLayoutAttributeLeading
+    )
+    view.setSpacing_(spacing)
+    return view
+
+
+def pin(view, container, inset=20):
+    container.addSubview_(view)
+    view.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    AppKit.NSLayoutConstraint.activateConstraints_(
+        [
+            view.leadingAnchor().constraintEqualToAnchor_constant_(
+                container.leadingAnchor(), inset
+            ),
+            view.trailingAnchor().constraintEqualToAnchor_constant_(
+                container.trailingAnchor(), -inset
+            ),
+            view.topAnchor().constraintEqualToAnchor_constant_(container.topAnchor(), inset),
+            view.bottomAnchor().constraintEqualToAnchor_constant_(container.bottomAnchor(), -inset),
+        ]
+    )
+
+
+def group(views):
+    box = AppKit.NSBox.alloc().init()
+    box.setTitlePosition_(AppKit.NSNoTitle)
+    box.setBoxType_(AppKit.NSBoxCustom)
+    box.setBorderType_(AppKit.NSLineBorder)
+    box.setBorderColor_(AppKit.NSColor.separatorColor())
+    box.setFillColor_(AppKit.NSColor.controlBackgroundColor())
+    box.setCornerRadius_(10)
+    box.setContentViewMargins_(AppKit.NSMakeSize(0, 0))
+    pin(stack(views), box.contentView(), 18)
+    return box
+
+
+def page(title, subtitle, groups):
+    view = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 700, 510))
+    content = stack(
+        [
+            label(title, 23, weight=AppKit.NSFontWeightBold),
+            label(subtitle, secondary=True),
+            *groups,
+        ],
+        spacing=18,
+    )
+    view.addSubview_(content)
+    content.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    constraints = [
+        content.leadingAnchor().constraintEqualToAnchor_constant_(view.leadingAnchor(), 32),
+        content.trailingAnchor().constraintEqualToAnchor_constant_(view.trailingAnchor(), -32),
+        content.topAnchor().constraintEqualToAnchor_constant_(view.topAnchor(), 28),
+        content.bottomAnchor().constraintLessThanOrEqualToAnchor_constant_(
+            view.bottomAnchor(), -24
+        ),
+    ]
+    for item in groups:
+        constraints.append(item.widthAnchor().constraintEqualToAnchor_(content.widthAnchor()))
+    AppKit.NSLayoutConstraint.activateConstraints_(constraints)
+    return view
+
+
 class SettingsWindowController(AppKit.NSWindowController):
-    def initWithDelegate_(self, delegate: object):
-        rect = AppKit.NSMakeRect(0, 0, 560, 390)
-        style = (
+    def initWithDelegate_(self, delegate):
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            AppKit.NSMakeRect(0, 0, 700, 560),
             AppKit.NSWindowStyleMaskTitled
             | AppKit.NSWindowStyleMaskClosable
-            | AppKit.NSWindowStyleMaskMiniaturizable
-        )
-        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            rect, style, AppKit.NSBackingStoreBuffered, False
+            | AppKit.NSWindowStyleMaskMiniaturizable,
+            AppKit.NSBackingStoreBuffered,
+            False,
         )
         self = objc.super(SettingsWindowController, self).initWithWindow_(window)
         if self is None:
             return None
         self._delegate = delegate
-        window.setTitle_("4G Bridge 设置")
+        window.setTitle_("4G Bridge")
         window.setReleasedWhenClosed_(False)
+        window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
+        self._tabs = AppKit.NSTabViewController.alloc().init()
+        self._tabs.setTabStyle_(AppKit.NSTabViewControllerTabStyleToolbar)
+        self._tabs.setTransitionOptions_(0)
+        for title, symbol, view in (
+            ("连接", "antenna.radiowaves.left.and.right", self._network_page()),
+            ("短信转发", "message", self._relay_page()),
+            ("隐私", "hand.raised", self._privacy_page()),
+            ("关于", "info.circle", self._about_page()),
+        ):
+            controller = AppKit.NSViewController.alloc().init()
+            controller.setView_(view)
+            controller.setTitle_(title)
+            item = AppKit.NSTabViewItem.tabViewItemWithViewController_(controller)
+            item.setLabel_(title)
+            item.setImage_(
+                AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, title)
+            )
+            self._tabs.addTabViewItem_(item)
+        window.setContentViewController_(self._tabs)
+        window.setToolbarStyle_(AppKit.NSWindowToolbarStylePreference)
+        window.setContentSize_(AppKit.NSMakeSize(700, 540))
         window.center()
-        self._build()
         return self
 
-    def _build(self) -> None:
-        tab_view = AppKit.NSTabView.alloc().initWithFrame_(AppKit.NSMakeRect(18, 18, 524, 354))
-        self.window().contentView().addSubview_(tab_view)
-        tab_view.addTabViewItem_(self._relay_tab())
-        module_tab, self._module_info = self._info_tab(
-            "模块与网络",
-            "网络与模块状态仅做只读探测。\nWi‑Fi 与 4G 同时连接时，默认流量始终优先走 Wi‑Fi。",
-        )
-        tab_view.addTabViewItem_(module_tab)
-        tab_view.addTabViewItem_(self._diagnostics_tab())
-        about_tab, _ = self._info_tab(
-            "关于", "4G Bridge 0.1.0\nQDC507 Modem Controller + SMS to iMessage Bridge"
-        )
-        tab_view.addTabViewItem_(about_tab)
-
-    def _relay_tab(self):
-        item = AppKit.NSTabViewItem.alloc().initWithIdentifier_("relay")
-        item.setLabel_("iMessage 转发")
-        view = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 500, 320))
-        self._enabled = AppKit.NSButton.checkboxWithTitle_target_action_(
-            "启用 iMessage 转发", self, "relayChanged:"
-        )
-        self._enabled.setFrame_(AppKit.NSMakeRect(22, 255, 300, 28))
-        view.addSubview_(self._enabled)
-        label = AppKit.NSTextField.labelWithString_("转发目标（手机号或 Apple ID）")
-        label.setFrame_(AppKit.NSMakeRect(22, 215, 320, 22))
-        view.addSubview_(label)
-        self._target = AppKit.NSSecureTextField.alloc().initWithFrame_(
-            AppKit.NSMakeRect(22, 176, 450, 30)
-        )
-        self._target.setPlaceholderString_("手机号或 Apple ID")
-        view.addSubview_(self._target)
-        save = AppKit.NSButton.buttonWithTitle_target_action_("保存", self, "saveTarget:")
-        save.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        save.setFrame_(AppKit.NSMakeRect(330, 124, 68, 32))
-        view.addSubview_(save)
-        test = AppKit.NSButton.buttonWithTitle_target_action_("发送测试消息", self, "sendTest:")
-        test.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        test.setFrame_(AppKit.NSMakeRect(404, 124, 108, 32))
-        view.addSubview_(test)
-        note = AppKit.NSTextField.wrappingLabelWithString_(
-            "首次发送时，macOS 会请求允许 4G Bridge 控制“信息”。"
-            "AppleScript 接受请求不等同于对端送达。"
-        )
-        note.setFrame_(AppKit.NSMakeRect(22, 62, 460, 48))
-        note.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-        view.addSubview_(note)
-        item.setView_(view)
-        return item
-
-    def _diagnostics_tab(self):
-        item = AppKit.NSTabViewItem.alloc().initWithIdentifier_("diagnostics")
-        item.setLabel_("隐私与诊断")
-        view = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 500, 320))
-        privacy = AppKit.NSTextField.wrappingLabelWithString_(
-            "短信正文不写入数据库或普通日志。日志中的号码、ICCID 与 Apple ID 会自动脱敏。"
-        )
-        privacy.setFrame_(AppKit.NSMakeRect(22, 238, 456, 44))
-        privacy.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-        view.addSubview_(privacy)
-        self._queue_info = AppKit.NSTextField.wrappingLabelWithString_("转发队列：正常")
-        self._queue_info.setFrame_(AppKit.NSMakeRect(22, 156, 456, 64))
-        view.addSubview_(self._queue_info)
-        retry = AppKit.NSButton.buttonWithTitle_target_action_(
-            "重新发送不确定项", self, "retryUnknown:"
-        )
-        retry.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        retry.setFrame_(AppKit.NSMakeRect(208, 104, 138, 32))
-        view.addSubview_(retry)
-        confirm = AppKit.NSButton.buttonWithTitle_target_action_(
-            "确认已接受并清理", self, "confirmUnknown:"
-        )
-        confirm.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        confirm.setFrame_(AppKit.NSMakeRect(352, 104, 138, 32))
-        view.addSubview_(confirm)
-        note = AppKit.NSTextField.wrappingLabelWithString_(
-            "仅当上次发送在数据库确认前中断时使用；应用默认不会自动重发，以避免重复。"
-        )
-        note.setFrame_(AppKit.NSMakeRect(22, 50, 456, 42))
-        note.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-        view.addSubview_(note)
-        item.setView_(view)
-        return item
-
-    @staticmethod
-    def _info_tab(title: str, text: str):
-        item = AppKit.NSTabViewItem.alloc().initWithIdentifier_(title)
-        item.setLabel_(title)
-        view = AppKit.NSVisualEffectView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 500, 320))
-        view.setMaterial_(AppKit.NSVisualEffectMaterialContentBackground)
-        label = AppKit.NSTextField.wrappingLabelWithString_(text)
-        label.setFrame_(AppKit.NSMakeRect(28, 72, 440, 210))
-        view.addSubview_(label)
-        item.setView_(view)
-        return item, label
+    @objc.python_method
+    def _button(self, title, action):
+        return AppKit.NSButton.buttonWithTitle_target_action_(title, self, action)
 
     @objc.python_method
-    def refresh(self) -> None:
-        self._enabled.setState_(
-            AppKit.NSControlStateValueOn
-            if self._delegate.relay_enabled()
-            else AppKit.NSControlStateValueOff
+    def _network_page(self):
+        self._connection = label("正在检测 QDC507…", 16, weight=AppKit.NSFontWeightSemibold)
+        self._network_status = label("4G 数据已关闭", secondary=True)
+        self._data_button = self._button("开启 4G 数据…", "toggleData:")
+        self._detail_values = {}
+        rows = []
+        for key, title in (
+            ("operator", "运营商"),
+            ("sim", "SIM 卡"),
+            ("signal", "信号"),
+            ("interface", "网络接口"),
+            ("ipv4", "IP 地址"),
+            ("gateway", "网关"),
+        ):
+            caption = label(title, 13, True)
+            caption.widthAnchor().constraintEqualToConstant_(100).setActive_(True)
+            value = label("—")
+            self._detail_values[key] = value
+            rows.append(stack([caption, value], True, spacing=16))
+        return page(
+            "连接",
+            "Wi-Fi 优先，4G 随时待命。",
+            [
+                group(
+                    [
+                        self._connection,
+                        self._network_status,
+                        stack([self._data_button, self._button("重新检测", "rescan:")], True),
+                    ]
+                ),
+                group([stack(rows, spacing=6)]),
+                label("启动、重新检测、睡眠和退出时会关闭 4G 数据。", 12, True),
+            ],
         )
-        self._target.setStringValue_(self._delegate.relay_target() or "")
-        self._module_info.setStringValue_(self._delegate.modem_details())
+
+    @objc.python_method
+    def _relay_page(self):
+        self._enabled = AppKit.NSSwitch.alloc().init()
+        self._enabled.setTarget_(self)
+        self._enabled.setAction_("relayChanged:")
+        self._enabled.setAccessibilityLabel_("iMessage 转发")
+        self._target = AppKit.NSTextField.alloc().init()
+        self._target.setPlaceholderString_("手机号或 Apple ID")
+        self._target.setAccessibilityLabel_("转发目标")
+        self._target.widthAnchor().constraintEqualToConstant_(460).setActive_(True)
+        self._target.setFont_(AppKit.NSFont.systemFontOfSize_(14))
+        return page(
+            "短信转发",
+            "把模块收到的短信，转发到你的“信息”会话。",
+            [
+                group(
+                    [
+                        stack(
+                            [
+                                label("iMessage 转发", 14, weight=AppKit.NSFontWeightSemibold),
+                                self._enabled,
+                            ],
+                            True,
+                        ),
+                        label("请先在 Mac 的“信息”中登录 iMessage。", 12, True),
+                    ]
+                ),
+                group(
+                    [
+                        label("转发给", weight=AppKit.NSFontWeightSemibold),
+                        self._target,
+                        stack(
+                            [
+                                self._button("保存目标", "saveTarget:"),
+                                self._button("发送测试消息", "sendTest:"),
+                            ],
+                            True,
+                        ),
+                    ]
+                ),
+                label(
+                    "目标保存在 macOS 钥匙串。首次发送时，系统会请求控制“信息”的权限。", 12, True
+                ),
+            ],
+        )
+
+    @objc.python_method
+    def _privacy_page(self):
+        self._queue_info = label("转发队列正常")
+        return page(
+            "隐私与诊断",
+            "短信留在你的设备和“信息”中。",
+            [
+                group(
+                    [
+                        label("仅保存处理状态", 14, weight=AppKit.NSFontWeightSemibold),
+                        label(
+                            "短信正文不写入数据库和日志；号码在诊断信息中脱敏。\n"
+                            "无需辅助功能或完全磁盘访问权限。",
+                            secondary=True,
+                        ),
+                    ]
+                ),
+                group(
+                    [
+                        self._queue_info,
+                        label("若发送曾意外中断，请先在“信息”中核对，再处理不确定项。", 12, True),
+                        stack(
+                            [
+                                self._button("重新发送不确定项", "retryUnknown:"),
+                                self._button("确认已发送", "confirmUnknown:"),
+                            ],
+                            True,
+                        ),
+                    ]
+                ),
+            ],
+        )
+
+    @objc.python_method
+    def _about_page(self):
+        return page(
+            "4G Bridge",
+            "蜂窝连接与短信转发，为 Mac 而设计。",
+            [
+                group(
+                    [
+                        label("版本 0.1.1", 16, weight=AppKit.NSFontWeightSemibold),
+                        label(
+                            "支持 DJI / Baiwang QDC507 · Apple Silicon\n"
+                            "原生 macOS 界面 · Wi-Fi 优先 · 本机处理",
+                            secondary=True,
+                        ),
+                    ]
+                ),
+            ],
+        )
+
+    @objc.python_method
+    def refresh(self, include_target=True):
+        self._enabled.setState_(int(self._delegate.relay_enabled()))
+        if include_target:
+            self._target.setStringValue_(self._delegate.relay_target() or "")
+        snapshot = self._delegate.current_snapshot()
+        self._connection.setStringValue_(
+            "QDC507 已连接" if snapshot.descriptor else "等待连接 QDC507"
+        )
+        state = snapshot.data_state.value
+        status = {
+            "off": "4G 数据已关闭",
+            "on": "4G 数据已开启 · Wi-Fi 可用时优先使用",
+            "enabling": "正在连接并检查网络…必要时会重启模块一次，请稍候。",
+            "disabling": "正在关闭…",
+            "protection_failed": "数据保护失败，请断开模块并重试",
+        }.get(state, "正在检测…")
+        self._network_status.setStringValue_(snapshot.warning or status)
+        self._data_button.setTitle_("关闭 4G 数据" if state == "on" else "开启 4G 数据…")
+        self._data_button.setEnabled_(
+            snapshot.descriptor is not None and state not in ("enabling", "disabling")
+        )
+        values = {
+            "operator": {"CHN-CT": "中国电信", "CHN-UNICOM": "中国联通"}.get(
+                snapshot.operator, snapshot.operator or "—"
+            ),
+            "sim": "已就绪" if snapshot.sim_state.value == "ready" else "未就绪",
+            "signal": f"{snapshot.rssi_dbm} dBm · {snapshot.rat or 'LTE'}"
+            if snapshot.rssi_dbm is not None
+            else "—",
+            "interface": snapshot.interface or "—",
+            "ipv4": snapshot.ipv4 or "未分配",
+            "gateway": snapshot.gateway or "—",
+        }
+        for key, value in values.items():
+            self._detail_values[key].setStringValue_(value)
         self._queue_info.setStringValue_(self._delegate.relay_queue_summary())
+
+    @objc.IBAction
+    def toggleData_(self, _sender):
+        self._delegate.toggle_data()
+
+    @objc.IBAction
+    def rescan_(self, _sender):
+        self._delegate.redetect()
 
     @objc.IBAction
     def relayChanged_(self, _sender):
@@ -147,9 +327,9 @@ class SettingsWindowController(AppKit.NSWindowController):
     @objc.IBAction
     def retryUnknown_(self, _sender):
         self._delegate.retry_delivery_unknown()
-        self.refresh()
+        self.refresh(False)
 
     @objc.IBAction
     def confirmUnknown_(self, _sender):
         self._delegate.confirm_delivery_unknown()
-        self.refresh()
+        self.refresh(False)

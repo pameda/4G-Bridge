@@ -13,16 +13,19 @@
 - 失败按 1、5、15 分钟重试；成功后才删除模块短信；删除失败只重试清理。
 - 数据默认 OFF；启动、USB 重连、睡眠、唤醒与正常退出均执行安全关闭。
 - 动态发现 ECM `enX` 与网络服务；从接口 counters 统计速度、本次、今日和本月流量。
-- Wi‑Fi 与 4G 同时连接时强制保持 Wi‑Fi 默认路由；校验失败会回滚关闭 4G。
-- 原生 AppKit、SF Symbols、语义色、深浅色适配；无 Dock 图标、无 WebView。
+- Wi‑Fi 与 4G 同时连接时保持 Wi‑Fi 服务优先；保留现有 VPN 默认路由。
+- 原生 AppKit 工具栏设置窗口、分组表单、系统开关、SF Symbols、语义色与深浅色适配。
+- 正确解析禁用网络服务，只控制明确识别的 QDC507；通用 USB 网卡不会被当成模块。
+- 取得有效 IP 和网关后才显示数据开启；ECM 链路不能恢复时，仅在用户确认开启后重启模块一次。
 
 ## 安装
 
-1. 打开 `artifacts/4G-Bridge-0.1.0-arm64.dmg`。
+1. 打开 `artifacts/4G-Bridge-0.1.1-arm64.dmg`。
 2. 将 4G Bridge 拖到“应用程序”。
 3. 首次启动若 Gatekeeper 提示，在“系统设置 → 隐私与安全性”中确认打开。
 4. 在设置中填写手机号或 Apple ID，保存到 macOS 钥匙串。
 5. 只有点击“发送测试消息”或真实短信需要转发时，系统才会请求 Automation 权限。
+6. 使用本软件前退出其他 QDC507 控制器，避免争用 AT 通道和网络开关。
 
 这是 ad-hoc 签名、未公证的 V1 构建；它不申请 Accessibility、Full Disk Access，不要求关闭 SIP，也不安装内核驱动。
 
@@ -47,4 +50,4 @@ Codex Run 按钮已绑定到 `script/build_and_run.sh`。依赖由 `requirements
 - 不改 DNS、静态路由、VPN 配置或无关网络服务顺序。
 - 仅在 QDC507 排在 Wi‑Fi 前时做最小顺序调整，并在开启后再次核验默认路由。
 
-本仓库当前为私有工程，第一方源码未授予公开复用许可证。第三方组件许可见 `THIRD_PARTY_NOTICES.md`。
+本仓库公开可见，第一方源码尚未授予复用许可证。第三方组件许可见 `THIRD_PARTY_NOTICES.md`。

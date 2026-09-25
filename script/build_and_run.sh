@@ -37,6 +37,7 @@ verify_app() {
   [[ "$(/usr/bin/plutil -extract LSUIElement raw -o - "$APP_BUNDLE/Contents/Info.plist")" == "true" ]]
   [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$APP_BUNDLE/Contents/Info.plist")" == "$BUNDLE_ID" ]]
   /usr/bin/file "$APP_BINARY" | /usr/bin/grep -q 'arm64'
+  "$PYTHON" "$ROOT_DIR/script/verify_ui.py" "$APP_BINARY" "$ARTIFACTS/ui-smoke"
 }
 
 package_dmg() {
@@ -44,7 +45,7 @@ package_dmg() {
   mkdir -p "$ARTIFACTS"
   stage="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-dmg.XXXXXX)"
   mount_point="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-mount.XXXXXX)"
-  dmg="$ARTIFACTS/4G-Bridge-0.1.0-arm64.dmg"
+  dmg="$ARTIFACTS/4G-Bridge-0.1.1-arm64.dmg"
   sha_file="$dmg.sha256"
   trap '/bin/rm -rf "$stage" "$mount_point"' RETURN
   /bin/cp -R "$APP_BUNDLE" "$stage/"

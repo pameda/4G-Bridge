@@ -57,6 +57,8 @@ class USBDiscovery:
         found: list[BulkEndpoints] = []
         for configuration in device:
             for interface in configuration:
+                if int(getattr(interface, "bInterfaceClass", 0xFF)) != 0xFF:
+                    continue
                 out_address: int | None = None
                 in_address: int | None = None
                 for endpoint in interface:

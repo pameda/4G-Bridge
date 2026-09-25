@@ -48,8 +48,11 @@ def test_session_factory_probes_and_closes(monkeypatch) -> None:
             self.responses.put(b"\r\nOK\r\n")
             self.writes = []
 
-        def set_configuration(self):
+        def get_active_configuration(self):
             return None
+
+        def set_configuration(self):
+            raise AssertionError("Must not reset the ECM configuration")
 
         def write(self, endpoint, data, timeout):
             self.writes.append((endpoint, bytes(data)))
@@ -78,12 +81,26 @@ def test_session_factory_probes_and_closes(monkeypatch) -> None:
 
 
 def test_session_factory_rejects_missing_endpoints() -> None:
+    class ConfiguredDevice:
+        def get_active_configuration(self):
+            return object()
+
     class Discovery:
         def open_device(self, descriptor):
-            return object()
+            return ConfiguredDevice()
 
         def scan_bulk_endpoints(self, target):
             return ()
 
     with pytest.raises(USBSessionError):
         USBSessionFactory(Discovery()).connect(DeviceDescriptor(0x2CA3, 0x4006))
+
+
+def test_at_probe_excludes_ecm_data_interface() -> None:
+    ecm = Interface([Endpoint(0x01), Endpoint(0x81)])
+    ecm.bInterfaceClass = 0x0A
+    serial = Interface([Endpoint(0x04), Endpoint(0x86)])
+    serial.bInterfaceClass = 0xFF
+    assert USBDiscovery.scan_bulk_endpoints(Device([[ecm, serial]])) == (
+        BulkEndpoints(3, 0x04, 0x86),
+    )
