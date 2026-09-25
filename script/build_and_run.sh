@@ -5,7 +5,13 @@ MODE="${1:-run}"
 APP_NAME="4G Bridge"
 BUNDLE_ID="com.pameda.fourgbridge"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON="$ROOT_DIR/.venv/bin/python"
+if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+  PYTHON="$ROOT_DIR/.venv/bin/python"
+elif command -v python3.14 >/dev/null 2>&1; then
+  PYTHON="$(command -v python3.14)"
+else
+  PYTHON="$(command -v python3)"
+fi
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 ARTIFACTS="$ROOT_DIR/artifacts"
