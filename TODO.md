@@ -12,8 +12,8 @@
 ## 发布
 
 - [ ] 配置 Apple Developer ID 后替换 ad-hoc 签名并完成公证。
-- [ ] 完成 GitHub 私有仓库设备登录与首次 push。
-- [ ] 用真实 tag `v0.1.0` 验证 GitHub Actions release。
+- [x] 完成 GitHub 私有仓库设备登录与首次 push。
+- [x] 用真实 tag `v0.1.0` 验证 GitHub Actions release。
 
 ## V2 预留
 

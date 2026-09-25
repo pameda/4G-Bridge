@@ -10,6 +10,8 @@
 
 门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。当前结果为 49 passed，整体覆盖率 89.00%，核心业务模块覆盖率 95%；门槛分别为 80% 与 90%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过 `.app` 启动与系统集成检查验证。
 
+GitHub Actions 的 `main` 与 `v0.1.0` 工作流均已通过；tag 工作流在官方 arm64 macOS runner 上重新安装锁定依赖、重跑门禁、生成并发布 DMG。
+
 覆盖内容包括 AT 分片/URC/prompt/timeout、Unicode/Emoji PDU、8/16-bit multipart、去重、重试、cleanup、SQLite 损坏隔离、AppleScript argv 注入防护、USB endpoint 变化、ECM 重编号、数据确认门、counter reset、日/月流量、设置权限与日志脱敏。
 
 ## 构建验证
