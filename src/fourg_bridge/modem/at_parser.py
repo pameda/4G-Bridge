@@ -19,6 +19,7 @@ _URC_PREFIXES = (
 
 @dataclass(slots=True)
 class ATParser:
+    expected_prefixes: tuple[str, ...] = ()
     _buffer: bytearray = field(default_factory=bytearray)
     _lines: list[str] = field(default_factory=list)
     _urcs: list[str] = field(default_factory=list)
@@ -65,9 +66,8 @@ class ATParser:
             if line:
                 (self._urcs if self._is_urc(line) else self._lines).append(line)
 
-    @staticmethod
-    def _is_urc(line: str) -> bool:
-        return line.startswith(_URC_PREFIXES)
+    def _is_urc(self, line: str) -> bool:
+        return not line.startswith(self.expected_prefixes) and line.startswith(_URC_PREFIXES)
 
     @staticmethod
     def _is_final(line: str) -> bool:

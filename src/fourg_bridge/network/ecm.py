@@ -47,6 +47,21 @@ def parse_service_order(output: str) -> dict[str, str]:
     return result
 
 
+def parse_ordered_services(output: str) -> tuple[tuple[str, str | None], ...]:
+    result: list[tuple[str, str | None]] = []
+    current_name: str | None = None
+    for line in output.splitlines():
+        match = re.match(r"\(\d+\)\s+(.+)$", line.strip())
+        if match:
+            current_name = match.group(1).lstrip("*").strip()
+            result.append((current_name, None))
+            continue
+        hardware_port = re.search(r"Hardware Port:\s*([^,)]+)", line)
+        if current_name and hardware_port:
+            result[-1] = (current_name, hardware_port.group(1).strip())
+    return tuple(result)
+
+
 class ECMDetector:
     MODEM_HINTS = ("baiwang", "qdc507", "ec25", "usb 10/100", "usb ethernet")
 
@@ -78,6 +93,22 @@ class ECMDetector:
             "/usr/sbin/ipconfig", "getifaddr", interface, allow_failure=True
         ).strip()
         return output or None
+
+    @staticmethod
+    def gateway(interface: str) -> str | None:
+        packet = ECMDetector._run("/usr/sbin/ipconfig", "getpacket", interface, allow_failure=True)
+        match = re.search(
+            r"router_identifier[^:]*:\s*(?:\{\s*)?(\d{1,3}(?:\.\d{1,3}){3})",
+            packet,
+        )
+        if match:
+            return match.group(1)
+        route = ECMDetector._run("/sbin/route", "-n", "get", "default", allow_failure=True)
+        route_interface = re.search(r"^\s*interface:\s*(\S+)", route, re.MULTILINE)
+        route_gateway = re.search(r"^\s*gateway:\s*(\S+)", route, re.MULTILINE)
+        if route_interface and route_gateway and route_interface.group(1) == interface:
+            return route_gateway.group(1)
+        return None
 
     @staticmethod
     def has_vpn() -> bool:

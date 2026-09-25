@@ -62,7 +62,9 @@ class ModemRuntime:
                 interface=interface.device,
                 network_service=interface.service,
                 ipv4=self._ecm.ipv4(interface.device),
+                gateway=self._ecm.gateway(interface.device),
                 default_interface=self._ecm.default_interface(),
+                vpn_active=self._ecm.has_vpn(),
                 data_state=self._data.state if self._data else DataState.OFF,
             )
             try:

@@ -1,7 +1,12 @@
 from fourg_bridge.cellular.data_control import ModemAttachControl, NetworkSetupControl
 from fourg_bridge.models import ATResponse, DataState, TrafficSnapshot
 from fourg_bridge.network.data_session import DataSessionManager
-from fourg_bridge.network.ecm import ECMDetector, parse_hardware_ports, parse_service_order
+from fourg_bridge.network.ecm import (
+    ECMDetector,
+    parse_hardware_ports,
+    parse_ordered_services,
+    parse_service_order,
+)
 from fourg_bridge.network.traffic import TrafficLedger, TrafficMonitor, parse_netstat_counters
 
 HARDWARE = """Hardware Port: Wi-Fi
@@ -25,6 +30,7 @@ def test_interface_renumbering_parsers() -> None:
     ports = parse_hardware_ports(HARDWARE)
     assert ports[1].device == "en9"
     assert parse_service_order(ORDER) == {"en0": "Wi-Fi", "en9": "Baiwang"}
+    assert parse_ordered_services(ORDER) == (("Wi-Fi", "Wi-Fi"), ("Baiwang", "Baiwang QDC507"))
 
 
 def test_detector_and_network_state(monkeypatch) -> None:
@@ -35,6 +41,8 @@ def test_detector_and_network_state(monkeypatch) -> None:
             return ORDER
         if "getifaddr" in arguments:
             return "192.168.225.10\n"
+        if "getpacket" in arguments:
+            return "router_identifier (ip): 192.168.225.1\n"
         if "route" in arguments[0]:
             return "interface: en0\n"
         return "utun4: flags\n\tinet 198.18.0.1\n"
@@ -43,6 +51,7 @@ def test_detector_and_network_state(monkeypatch) -> None:
     interface = ECMDetector().discover()
     assert interface is not None and interface.device == "en9"
     assert ECMDetector.ipv4("en9") == "192.168.225.10"
+    assert ECMDetector.gateway("en9") == "192.168.225.1"
     assert ECMDetector.default_interface() == "en0"
     assert ECMDetector.has_vpn()
 
@@ -87,6 +96,34 @@ def test_disable_falls_back_to_detach() -> None:
     assert not modem.attached
 
 
+def test_enable_stops_when_wifi_priority_cannot_be_protected() -> None:
+    class UnsafeNetwork(Network):
+        def ensure_wifi_precedes(self, service):
+            return False
+
+    modem = Modem()
+    manager = DataSessionManager("Baiwang", UnsafeNetwork(), modem)
+    result = manager.set_enabled(True, user_confirmed=True)
+    assert result.current == DataState.PROTECTION_FAILED
+    assert modem.attached
+
+
+def test_enable_rolls_back_when_wifi_is_not_default() -> None:
+    class WrongDefault(Network):
+        def ensure_wifi_precedes(self, service):
+            return True
+
+        def verify_wifi_default(self):
+            return False
+
+    modem = Modem()
+    manager = DataSessionManager("Baiwang", WrongDefault(), modem)
+    result = manager.set_enabled(True, user_confirmed=True)
+    assert result.current == DataState.OFF
+    assert result.protected
+    assert not modem.attached
+
+
 def test_counter_parser_and_reset(monkeypatch) -> None:
     first = (
         "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\n"
@@ -118,15 +155,46 @@ def test_networksetup_and_attach_controls(monkeypatch) -> None:
             self.stdout = stdout
 
     calls = []
+    reordered = False
 
     def run(arguments, **kwargs):
+        nonlocal reordered
         calls.append(arguments)
         if "-listallnetworkservices" in arguments:
             return Result("An asterisk denotes disabled.\nWi-Fi\n*Baiwang\n")
+        if "-listnetworkserviceorder" in arguments:
+            if reordered:
+                return Result(
+                    "(1) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n"
+                    "(2) Baiwang\n(Hardware Port: Baiwang QDC507, Device: en9)\n"
+                    "(3) VPN\n(Hardware Port: VPN, Device: utun4)\n"
+                )
+            return Result(
+                "(1) Baiwang\n(Hardware Port: Baiwang QDC507, Device: en9)\n"
+                "(2) VPN\n(Hardware Port: VPN, Device: utun4)\n"
+                "(3) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n"
+            )
+        if "-ordernetworkservices" in arguments:
+            reordered = True
+        if "-listallhardwareports" in arguments:
+            return Result(HARDWARE)
+        if "getifaddr" in arguments:
+            return Result("192.168.1.2\n")
+        if arguments[:4] == ["/sbin/route", "-n", "get", "default"]:
+            return Result("interface: en0\n")
         return Result()
 
     monkeypatch.setattr("subprocess.run", run)
     control = NetworkSetupControl()
+    assert control.ensure_wifi_precedes("Baiwang")
+    assert control.verify_wifi_default()
+    assert [
+        "/usr/sbin/networksetup",
+        "-ordernetworkservices",
+        "Wi-Fi",
+        "Baiwang",
+        "VPN",
+    ] in calls
     assert control.set_enabled("Baiwang", False)
     assert not control.is_enabled("Baiwang")
 

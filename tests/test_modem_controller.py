@@ -20,9 +20,16 @@ class Discovery:
 
 class Transport:
     responses: ClassVar[dict[str, tuple[str, ...]]] = {
+        "ATI": ("Quectel", "EC25", "Revision: TEST"),
+        'AT+QCFG="usbnet"': ('+QCFG: "usbnet",1',),
+        'AT+QCFG="usbcfg"': ('+QCFG: "usbcfg",0x2c7c,0x0125',),
         "AT+CPIN?": ("+CPIN: READY",),
+        "AT+QCCID": ("+QCCID: 89860123456789012345",),
+        "AT+CNUM": ('+CNUM: "","+15555550123",145',),
         "AT+COPS?": ('+COPS: 0,0,"中国电信",7',),
         "AT+CEREG?": ("+CEREG: 0,1",),
+        "AT+CGREG?": ("+CGREG: 0,1",),
+        "AT+CREG?": ("+CREG: 0,1",),
         "AT+QNWINFO": ('+QNWINFO: "FDD LTE","46011","LTE BAND 3",1850',),
         "AT+CSQ": ("+CSQ: 18,99",),
     }
@@ -45,6 +52,9 @@ def test_full_snapshot() -> None:
     assert snapshot.registration == RegistrationState.REGISTERED_HOME
     assert snapshot.operator == "中国电信"
     assert snapshot.rssi_dbm == -77
+    assert snapshot.iccid == "89860123456789012345"
+    assert snapshot.phone_number == "+15555550123"
+    assert snapshot.modem_identity == "Quectel · EC25 · Revision: TEST"
 
 
 def test_transport_failure_is_contained() -> None:

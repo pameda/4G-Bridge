@@ -26,3 +26,11 @@ def test_signal_and_registration_parsers() -> None:
     assert parse_csq(("broken",)) == (None, None)
     assert parse_registration(("+CEREG: 0,5",)) == 5
     assert parse_registration(("+CREG: 1",)) == 1
+
+
+def test_expected_registration_response_is_not_classified_as_urc() -> None:
+    parser = ATParser(("+CEREG:",))
+    response = parser.feed(b"\r\n+CEREG: 0,5\r\nOK\r\n")
+    assert response is not None
+    assert response.lines == ("+CEREG: 0,5",)
+    assert parser.drain_urcs() == ()

@@ -81,7 +81,11 @@ class ATResponse:
 class ModemSnapshot:
     device_state: DeviceState = DeviceState.MISSING
     descriptor: DeviceDescriptor | None = None
+    modem_identity: str | None = None
+    usb_configuration: str | None = None
     sim_state: SIMState = SIMState.UNKNOWN
+    iccid: str | None = field(default=None, repr=False)
+    phone_number: str | None = field(default=None, repr=False)
     operator: str | None = None
     registration: RegistrationState = RegistrationState.UNKNOWN
     rat: str | None = None
@@ -92,6 +96,7 @@ class ModemSnapshot:
     ipv4: str | None = None
     gateway: str | None = None
     default_interface: str | None = None
+    vpn_active: bool = False
     data_state: DataState = DataState.OFF
     warning: str | None = None
 

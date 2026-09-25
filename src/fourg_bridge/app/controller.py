@@ -12,11 +12,12 @@ from PyObjCTools import AppHelper
 from fourg_bridge.app.runtime import ModemRuntime
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.imessage.runner import AppleScriptRunner
-from fourg_bridge.models import DataState, DeviceState, ModemSnapshot, RelayError
+from fourg_bridge.models import DataState, DeviceState, ModemSnapshot, RelayError, RelayStatus
 from fourg_bridge.modem.usb_discovery import USBDiscovery
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
 from fourg_bridge.storage.settings import Settings, SettingsStore
+from fourg_bridge.support.privacy import redact_identifier
 from fourg_bridge.ui.menu_bar import MenuBarController
 from fourg_bridge.ui.settings_window import SettingsWindowController
 
@@ -154,12 +155,82 @@ class ApplicationController:
         except KeychainError:
             return None
 
+    def modem_details(self) -> str:
+        snapshot = self._snapshot
+        descriptor = snapshot.descriptor
+        usb = (
+            f"{descriptor.vendor_id:04X}:{descriptor.product_id:04X}" if descriptor else "未检测到"
+        )
+        product = (
+            " / ".join(
+                value
+                for value in (
+                    (descriptor.manufacturer if descriptor else None),
+                    (descriptor.product if descriptor else None),
+                )
+                if value
+            )
+            or "—"
+        )
+        vpn = "已连接" if snapshot.vpn_active else "未连接"
+        return "\n".join(
+            (
+                f"USB：{usb}  {product}",
+                f"模块：{snapshot.modem_identity or '—'}",
+                f"USB 配置：{snapshot.usb_configuration or '—'}",
+                f"SIM：{snapshot.sim_state.value.upper()}",
+                f"ICCID：{redact_identifier(snapshot.iccid)}",
+                f"号码：{redact_identifier(snapshot.phone_number)}",
+                f"运营商 / RAT：{snapshot.operator or '—'} / {snapshot.rat or '—'}",
+                f"接口 / 服务：{snapshot.interface or '—'} / {snapshot.network_service or '—'}",
+                f"IPv4 / 网关：{snapshot.ipv4 or '—'} / {snapshot.gateway or '—'}",
+                f"默认接口 / VPN：{snapshot.default_interface or '—'} / {vpn}",
+                "Wi‑Fi 与 4G 同时连接时默认流量优先走 Wi‑Fi。",
+                "4G 数据在启动、重连、睡眠、唤醒及退出时保持关闭。",
+            )
+        )
+
     def set_relay_target(self, target: str) -> None:
         try:
             self._keychain.set_target(target)
             self._show_alert("已保存", "转发目标已安全存入 macOS 钥匙串。")
         except KeychainError:
             self._show_alert("保存失败", "无法写入 macOS 钥匙串。")
+
+    def relay_queue_summary(self) -> str:
+        unknown = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)
+        retry = self._database.records_with_status(RelayStatus.RETRY)
+        cleanup = self._database.records_with_status(RelayStatus.CLEANUP_PENDING)
+        if not (unknown or retry or cleanup):
+            return "转发队列：正常"
+        lines = [f"等待重试：{len(retry)}  投递不确定：{len(unknown)}  等待清理：{len(cleanup)}"]
+        if unknown:
+            record = unknown[0]
+            lines.append(
+                f"最近不确定项：{record.timestamp[:16].replace('T', ' ')} / "
+                f"{redact_identifier(record.sender)}"
+            )
+        return "\n".join(lines)
+
+    def retry_delivery_unknown(self) -> None:
+        records = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)
+        for record in records:
+            self._database.transition(
+                record.message_hash,
+                RelayStatus.RETRY,
+                retry_count=record.retry_count,
+            )
+        if records:
+            self.rescan()
+        self._show_alert("已更新转发队列", f"{len(records)} 项将在模块短信重新读取后发送。")
+
+    def confirm_delivery_unknown(self) -> None:
+        records = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)
+        for record in records:
+            self._database.transition(record.message_hash, RelayStatus.CLEANUP_PENDING)
+        if records:
+            self.rescan()
+        self._show_alert("已更新清理队列", f"{len(records)} 项不会重发，只会清理模块短信。")
 
     def send_test_message(self) -> None:
         result = self._bridge.send_test()

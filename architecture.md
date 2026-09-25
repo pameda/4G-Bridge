@@ -45,7 +45,7 @@ sending（进程崩溃）→ delivery_unknown
 
 ## 数据安全状态
 
-内存中的 data state 从不持久化。启动时为 OFF。ECM 服务被明确识别后，OFF 首先禁用该服务并验证；只有失败时才使用 `CGATT=0`。ON 需要 UI 明确确认，并先恢复 `CGATT=1` 再启用该服务。V1 不修改 DNS、静态路由或无关服务顺序。
+内存中的 data state 从不持久化。启动时为 OFF。ECM 服务被明确识别后，OFF 首先禁用该服务并验证；只有失败时才使用 `CGATT=0`。ON 需要 UI 明确确认。若 Wi‑Fi 与 4G 同时存在，只在 QDC507 排在 Wi‑Fi 前时把 Wi‑Fi 移到其前一位，其他服务相对顺序不变；启用后再核验默认接口，Wi‑Fi 已联网但默认路由不在 Wi‑Fi 时立即禁用 QDC507 并 `CGATT=0` 回滚。V1 不修改 DNS、静态路由或 VPN 配置。
 
 ## 权限
 

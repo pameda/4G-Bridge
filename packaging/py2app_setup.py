@@ -7,6 +7,9 @@ APP = [str(ROOT / "src/fourg_bridge/app/main.py")]
 
 OPTIONS = {
     "argv_emulation": False,
+    # The app is AppKit-only.  Excluding Tk prevents the python.org framework's
+    # bundled Tcl/Tk static archives from entering (and breaking) code signing.
+    "excludes": ["_tkinter", "tkinter", "test", "unittest"],
     "packages": ["fourg_bridge", "usb", "libusb_package"],
     "resources": [str(ROOT / "src/fourg_bridge/imessage/resources/relay.applescript")],
     "dist_dir": str(ROOT / "dist"),

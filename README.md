@@ -13,6 +13,7 @@
 - 失败按 1、5、15 分钟重试；成功后才删除模块短信；删除失败只重试清理。
 - 数据默认 OFF；启动、USB 重连、睡眠、唤醒与正常退出均执行安全关闭。
 - 动态发现 ECM `enX` 与网络服务；从接口 counters 统计速度、本次、今日和本月流量。
+- Wi‑Fi 与 4G 同时连接时强制保持 Wi‑Fi 默认路由；校验失败会回滚关闭 4G。
 - 原生 AppKit、SF Symbols、语义色、深浅色适配；无 Dock 图标、无 WebView。
 
 ## 安装
@@ -44,5 +45,6 @@ Codex Run 按钮已绑定到 `script/build_and_run.sh`。依赖由 `requirements
 - 不保存 Apple ID 密码或 Token。
 - 不自动开启 SIM 数据；开启前必须由用户明确确认。
 - 不改 DNS、静态路由、VPN 配置或无关网络服务顺序。
+- 仅在 QDC507 排在 Wi‑Fi 前时做最小顺序调整，并在开启后再次核验默认路由。
 
 本仓库当前为私有工程，第一方源码未授予公开复用许可证。第三方组件许可见 `THIRD_PARTY_NOTICES.md`。

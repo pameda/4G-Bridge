@@ -75,7 +75,7 @@ class ATTransport:
                 request.completed.set()
 
     def _perform(self, request: _Request) -> ATResponse:
-        parser = ATParser()
+        parser = ATParser((_response_prefix(request.command),))
         encoded = request.command.encode("ascii", errors="strict") + b"\r"
         self._writer(encoded, 1000)
         deadline = time.monotonic() + request.timeout
@@ -101,3 +101,10 @@ class ATTransport:
                 continue
             return response
         raise ATTimeout(f"timeout waiting for {request.command.split('=', 1)[0]}")
+
+
+def _response_prefix(command: str) -> str:
+    if not command.startswith("AT+"):
+        return "\0"
+    name = command[3:].split("=", 1)[0].split("?", 1)[0]
+    return f"+{name}:"

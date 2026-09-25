@@ -8,6 +8,9 @@ def test_log_redaction() -> None:
     assert "89860123456789012345" not in redacted
     assert "user@example.com" not in redacted
     assert redact_identifier("15555550123") == "155****0123"
+    assert redact_identifier(None) == "—"
+    assert redact_identifier("1008") == "****"
+    assert redact_identifier("user@example.com") == "u***@e***"
 
 
 def test_stable_hash_normalizes_sender_and_pdu_case() -> None:

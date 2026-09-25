@@ -1,10 +1,17 @@
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 
 from fourg_bridge.models import RawSMSPart
 from fourg_bridge.sms.assembler import SMSAssembler
-from fourg_bridge.sms.pdu_decoder import PDUDecodeError, decode_pdu
+from fourg_bridge.sms.pdu_decoder import (
+    PDUDecodeError,
+    _decode_gsm7,
+    _decode_timestamp,
+    _parse_udh,
+    decode_pdu,
+)
 
 
 def _semi(value: str) -> bytes:
@@ -21,6 +28,21 @@ def _ucs2_pdu(text: str, *, udh: bytes = b"", sender: str = "10086") -> str:
         + bytes([first, len(sender), 0x91])
         + _semi(sender)
         + b"\x00\x08"
+        + scts
+        + bytes([len(payload)])
+        + payload
+    )
+    return pdu.hex().upper()
+
+
+def _binary_pdu(payload: bytes, *, dcs: int, udhi: bool = False) -> str:
+    sender = "10086"
+    scts = bytes.fromhex("62903251820000")
+    pdu = (
+        b"\x00"
+        + bytes([0x44 if udhi else 0x04, len(sender), 0x91])
+        + _semi(sender)
+        + bytes([0x00, dcs])
         + scts
         + bytes([len(payload)])
         + payload
@@ -89,3 +111,40 @@ def test_gsm7_multipart_respects_udh_fill_bits() -> None:
 def test_invalid_pdu_is_rejected() -> None:
     with pytest.raises(PDUDecodeError):
         decode_pdu(RawSMSPart("ME", 1, "not-hex"))
+    for pdu in ("00", "05AA", "00040B91"):
+        with pytest.raises(PDUDecodeError):
+            decode_pdu(RawSMSPart("ME", 1, pdu))
+
+
+def test_8bit_payload_and_malformed_unicode_or_udh() -> None:
+    part = decode_pdu(RawSMSPart("ME", 1, _binary_pdu(b"\x48\x69", dcs=0x04)))
+    assert part.text == "Hi"
+    with pytest.raises(PDUDecodeError, match="UTF-16BE"):
+        decode_pdu(RawSMSPart("ME", 1, _binary_pdu(b"\x00", dcs=0x08)))
+    with pytest.raises(PDUDecodeError, match="without user data"):
+        decode_pdu(RawSMSPart("ME", 1, _binary_pdu(b"", dcs=0x00, udhi=True)))
+    with pytest.raises(PDUDecodeError, match="truncated UDH"):
+        decode_pdu(RawSMSPart("ME", 1, _binary_pdu(b"\x05\x00", dcs=0x00, udhi=True)))
+
+
+def test_low_level_pdu_edge_cases() -> None:
+    assert _decode_gsm7(bytes([0x1B, 0x0A]), 2) == "^"
+    assert _decode_gsm7(b"\x1b", 1) == "�"
+    assert _decode_gsm7(bytes([0x9B, 0x00]), 2) == "�"
+    assert _parse_udh(b"\x70\x01\x01") == (None, 1, 1)
+    assert _parse_udh(b"\x70\x05\x01") == (None, 1, 1)
+    with pytest.raises(PDUDecodeError, match="invalid SCTS"):
+        _decode_timestamp(b"")
+    with pytest.raises(PDUDecodeError, match="date"):
+        _decode_timestamp(bytes.fromhex("62310100000000"))
+
+
+def test_assembler_single_part_expiry_and_reference_reuse() -> None:
+    first = decode_pdu(RawSMSPart("ME", 1, _ucs2_pdu("A", udh=bytes.fromhex("0500037A0201"))))
+    single = replace(first, concat_ref=None, concat_total=1, concat_sequence=1)
+    assert SMSAssembler().add(single).body == "A"
+
+    assembler = SMSAssembler(expiry=timedelta(seconds=-1))
+    assert assembler.add(first) is None
+    second = replace(first, concat_total=3, concat_sequence=2, text="B", index=2)
+    assert assembler.add(second) is None

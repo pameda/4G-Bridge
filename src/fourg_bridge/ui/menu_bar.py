@@ -29,12 +29,17 @@ class MenuBarController(AppKit.NSObject):
         heading.setEnabled_(False)
         self._menu.addItem_(heading)
         self._add_value("device", "QDC507", "未连接")
+        self._add_value("usb", "USB", "—")
         self._add_value("operator", "运营商", "—")
         self._add_value("sim", "SIM", "未知")
         self._add_value("signal", "信号", "—")
         self._add_value("registration", "LTE", "未注册")
+        self._add_value("rat", "RAT", "—")
         self._add_value("interface", "接口", "—")
         self._add_value("ip", "IP", "—")
+        self._add_value("gateway", "网关", "—")
+        self._add_value("default", "默认接口", "—")
+        self._add_value("vpn", "VPN", "未连接")
         self._add_value("download", "当前下载", "—")
         self._add_value("upload", "当前上传", "—")
         self._add_value("session", "本次连接", "—")
@@ -92,12 +97,21 @@ class MenuBarController(AppKit.NSObject):
         image.setTemplate_(True)
         button.setImage_(image)
         self._set("device", "已连接" if snapshot.descriptor else "未连接")
+        descriptor = snapshot.descriptor
+        self._set(
+            "usb",
+            f"{descriptor.vendor_id:04X}:{descriptor.product_id:04X}" if descriptor else "—",
+        )
         self._set("operator", snapshot.operator or "—")
         self._set("sim", snapshot.sim_state.value.upper())
-        self._set("signal", f"{snapshot.rssi_dbm} dBm" if snapshot.rssi_dbm else "—")
+        self._set("signal", f"{snapshot.rssi_dbm} dBm" if snapshot.rssi_dbm is not None else "—")
         self._set("registration", snapshot.registration.value)
+        self._set("rat", snapshot.rat or "—")
         self._set("interface", snapshot.interface or "—")
         self._set("ip", snapshot.ipv4 or "—")
+        self._set("gateway", snapshot.gateway or "—")
+        self._set("default", snapshot.default_interface or "—")
+        self._set("vpn", "已连接" if snapshot.vpn_active else "未连接")
         self._values["data"].setTitle_(
             "关闭 4G 数据" if snapshot.data_state == DataState.ON else "开启 4G 数据…"
         )

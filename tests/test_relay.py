@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fourg_bridge.models import AssembledSMS, RelayError, RelayResult, RelayStatus
 from fourg_bridge.sms.relay import SMSRelay
@@ -68,6 +68,36 @@ def test_cleanup_pending_never_resends(tmp_path) -> None:
     assert record.status == RelayStatus.CLEANUP_PENDING
     relay.enqueue(_message())
     assert bridge.calls == 1
+    relay.retry_cleanup()
+    assert database.get(record.message_hash).status == RelayStatus.CLEANUP_PENDING
     cleaner.succeeds = True
     relay.retry_cleanup()
     assert database.get(record.message_hash).status == RelayStatus.SENT
+
+
+def test_recover_interrupted_marks_delivery_unknown(tmp_path) -> None:
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+    pending = database.create_pending("hash", "10086", "2026-09-23T00:00:00+00:00", (("ME", 1),))
+    database.transition(pending.message_hash, RelayStatus.SENDING)
+    relay = SMSRelay(database, FakeBridge(RelayResult(True)), FakeCleaner())
+    relay.recover_interrupted()
+    assert database.get("hash").status == RelayStatus.DELIVERY_UNKNOWN
+
+
+def test_retry_budget_stops_after_three_retries(tmp_path) -> None:
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+    bridge = FakeBridge(RelayResult(False, RelayError.SCRIPT_FAILED))
+    relay = SMSRelay(database, bridge, FakeCleaner())
+    record = relay.enqueue(_message())
+    for _ in range(3):
+        database.transition(
+            record.message_hash,
+            RelayStatus.RETRY,
+            retry_count=record.retry_count,
+            next_retry_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        )
+        record = relay.enqueue(_message())
+    assert record.status == RelayStatus.FAILED
+    assert record.retry_count == 4
+    relay.enqueue(_message())
+    assert bridge.calls == 4

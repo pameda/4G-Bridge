@@ -8,7 +8,7 @@
 ./script/test.sh
 ```
 
-门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。当前结果为 40 passed，核心可测模块覆盖率 86.40%，最低门槛 80%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过 `.app` 启动与系统集成检查验证。
+门禁依次执行 Ruff format/check、strict mypy 与 pytest/coverage。当前结果为 49 passed，整体覆盖率 89.00%，核心业务模块覆盖率 95%；门槛分别为 80% 与 90%。AppKit 生命周期胶水、UI 和 Keychain 系统绑定不计入核心覆盖率，通过 `.app` 启动与系统集成检查验证。
 
 覆盖内容包括 AT 分片/URC/prompt/timeout、Unicode/Emoji PDU、8/16-bit multipart、去重、重试、cleanup、SQLite 损坏隔离、AppleScript argv 注入防护、USB endpoint 变化、ECM 重编号、数据确认门、counter reset、日/月流量、设置权限与日志脱敏。
 
@@ -26,7 +26,7 @@
 2. 插入模块，只读检查 VID/PID、AT endpoint、SIM、运营商、注册和信号。
 3. 拔出并重插，确认旧 session 释放，endpoint 和 ECM 接口重新发现。
 4. 分别测试未插 SIM、未注册、无信号和 AT timeout。
-5. 保持 Wi-Fi 与 VPN，确认默认路由/配置未被无关修改。
+5. 保持 Wi-Fi 与 VPN，确认 Wi-Fi 始终是默认接口，VPN 与其他服务相对顺序不变。
 6. 睡眠/唤醒后确认数据 OFF。
 7. 取得明确确认后测试数据 ON/OFF；记录前后 network service 与 `CGATT`。
 8. 取得明确确认后发送固定 iMessage 测试文本。
