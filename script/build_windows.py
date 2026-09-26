@@ -9,6 +9,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tkinter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,11 +65,11 @@ def notices(target: Path) -> None:
     python_root = Path(sys.base_prefix)
     for source in (
         python_root / "LICENSE.txt",
-        python_root / "tcl/tcl8.6/license.terms",
-        python_root / "tcl/tk8.6/license.terms",
+        python_root / f"tcl/tcl{tkinter.TclVersion}/license.terms",
+        python_root / f"tcl/tk{tkinter.TkVersion}/license.terms",
     ):
         if not source.is_file():
-            raise RuntimeError(f"Missing runtime license: {source.name}")
+            raise RuntimeError(f"Missing runtime license: {source}")
         shutil.copy2(source, target / (source.parent.name + "-" + source.name))
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", target)
 
