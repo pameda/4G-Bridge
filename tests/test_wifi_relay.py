@@ -82,7 +82,7 @@ def test_controller_polls_sms_before_network_status_even_without_4g(monkeypatch,
     app._bridge = SimpleNamespace(target_status=lambda: RelayResult(target_ready))
     app._discovery = SimpleNamespace(discover=lambda: object())
     app._runtime = SimpleNamespace(
-        poll_sms=lambda: (calls.append("sms") or None),
+        poll_sms=lambda **kw: (calls.append("sms") or None),
         snapshot=lambda: (
             calls.append("status")
             or ModemSnapshot(data_state=DataState.OFF, default_interface="en0")

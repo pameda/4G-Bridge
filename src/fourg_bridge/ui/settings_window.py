@@ -12,6 +12,7 @@ from fourg_bridge.support.presentation import (
     operator_name,
     route_description,
 )
+from fourg_bridge.ui.app_network import AppNetworkTable
 from fourg_bridge.ui.components import (
     SpeedChart,
     columns,
@@ -53,6 +54,9 @@ class SettingsWindowController(AppKit.NSWindowController):
             ("短信转发", "message", self._relay_page()),
             ("设备", "antenna.radiowaves.left.and.right", self._device_page()),
             ("设置", "gearshape", self._preferences_page()),
+            ("应用网络", "network", self._app_network_page()),
+            ("运营商", "simcard", self._carrier_page()),
+            ("运行日志", "list.bullet.rectangle", self._log_page()),
         ):
             controller = AppKit.NSViewController.alloc().init()
             controller.setView_(view)
@@ -350,7 +354,163 @@ class SettingsWindowController(AppKit.NSWindowController):
         )
 
     @objc.python_method
+    def _log_page(self):
+        self._log_filter = AppKit.NSPopUpButton.alloc().init()
+        self._log_filter.addItemsWithTitles_(["全部事件", "仅警告"])
+        self._log_filter.setTarget_(self)
+        self._log_filter.setAction_("logFilterChanged:")
+        self._log_text = AppKit.NSTextView.alloc().initWithFrame_(((0, 0), (700, 360)))
+        self._log_text.setEditable_(False)
+        self._log_text.setSelectable_(True)
+        self._log_text.setFont_(
+            AppKit.NSFont.monospacedSystemFontOfSize_weight_(12, AppKit.NSFontWeightRegular)
+        )
+        self._log_text.setTextColor_(AppKit.NSColor.labelColor())
+        self._log_text.setBackgroundColor_(AppKit.NSColor.textBackgroundColor())
+        self._log_text.setAutoresizingMask_(AppKit.NSViewWidthSizable)
+        self._log_text.textContainer().setWidthTracksTextView_(True)
+        scroll = AppKit.NSScrollView.alloc().init()
+        scroll.setDocumentView_(self._log_text)
+        scroll.setHasVerticalScroller_(True)
+        scroll.heightAnchor().constraintEqualToConstant_(360).setActive_(True)
+        return page(
+            "运行日志",
+            "连接变化与运行状态，清楚可查。",
+            [
+                group(
+                    [
+                        stack(
+                            [
+                                self._log_filter,
+                                self._button("复制日志", "copyLogs:"),
+                                self._button("清空", "clearLogs:"),
+                            ],
+                            True,
+                        ),
+                        scroll,
+                        label(
+                            "仅保留本次运行最近 500 条事件，退出即清除。\n"
+                            "不记录短信正文、号码、Apple ID 或访问地址。",
+                            11,
+                            True,
+                        ),
+                    ]
+                )
+            ],
+        )
+
+    @objc.python_method
+    def refresh_logs(self):
+        text = self._delegate.event_log(self._log_filter.indexOfSelectedItem() == 1)
+        text = text or "暂无运行事件"
+        if self._log_text.string() != text:
+            self._log_text.setString_(text)
+
+    @objc.IBAction
+    def logFilterChanged_(self, _sender):
+        self.refresh_logs()
+
+    @objc.IBAction
+    def copyLogs_(self, _sender):
+        board = AppKit.NSPasteboard.generalPasteboard()
+        board.clearContents()
+        board.setString_forType_(self._log_text.string(), AppKit.NSPasteboardTypeString)
+
+    @objc.IBAction
+    def clearLogs_(self, _sender):
+        self._delegate.clear_event_log()
+        self.refresh_logs()
+
+    @objc.python_method
+    def _app_network_page(self):
+        self._app_table = AppNetworkTable.alloc().initWithCompact_(False)
+        self._app_network_status = label("等待系统计数", 12, True)
+        self._app_pause = self._button("暂停观测", "toggleAppNetwork:")
+        return page(
+            "应用网络",
+            "查看哪些应用正在使用网络。",
+            [
+                group(
+                    [
+                        stack([section_title("APP NETWORK", "network"), self._app_pause], True),
+                        self._app_network_status,
+                        self._app_table.view,
+                        label(
+                            "按实时速率排序。仅在此页或菜单面板打开时采样，本次观测累计只保存在内存。\n"
+                            "所有接口的进程计数（含本地回环），不是 SIM 账单；"
+                            "VPN／代理可能重复计数，不能据此判断 Wi-Fi／4G 出口。",
+                            11,
+                            True,
+                        ),
+                    ]
+                )
+            ],
+        )
+
+    @objc.python_method
+    def _carrier_page(self):
+        self._carrier_number = AppKit.NSPopUpButton.alloc().init()
+        self._carrier_number.addItemsWithTitles_(["10001", "10086", "10010"])
+        self._carrier_number.setAccessibilityLabel_("运营商短信服务号")
+        self._carrier_command = AppKit.NSTextField.textFieldWithString_("108")
+        self._carrier_command.widthAnchor().constraintEqualToConstant_(100).setActive_(True)
+        self._carrier_command.setAccessibilityLabel_("运营商查询指令")
+        self._carrier_button = self._button("查询一次…", "queryCarrier:")
+        self._carrier_note = label("尚未发送查询", 12, True)
+        self._carrier_remaining = label("—", 30, weight=AppKit.NSFontWeightSemibold, numeric=True)
+        self._carrier_updated = label("等待运营商短信回复", 12, True)
+        self._carrier_policy = label("尚未启用套餐保护", 12, True)
+        return page(
+            "运营商流量",
+            "套餐余量与本机计数，分开查看。",
+            [
+                group(
+                    [
+                        section_title("剩余流量 · 短信识别", "simcard"),
+                        self._carrier_remaining,
+                        self._carrier_updated,
+                        self._carrier_policy,
+                        self._button("启用／停用套餐自动接管…", "carrierPolicy:"),
+                        label(
+                            "电信通用流量包含明确列出的结转项；不累加通话、促销或重叠套餐。",
+                            11,
+                            True,
+                        ),
+                    ]
+                ),
+                group(
+                    [
+                        section_title("手动查询", "paperplane"),
+                        stack(
+                            [
+                                label("服务号", 12),
+                                self._carrier_number,
+                                label("指令", 12),
+                                self._carrier_command,
+                                self._carrier_button,
+                            ],
+                            True,
+                        ),
+                        self._carrier_note,
+                        label(
+                            "预填电信 10001 / 108。地区、运营商及套餐可能不同，发送前请核实。\n"
+                            "查询短信可能收费，发送前再次确认；自动定时查询关闭。\n"
+                            "收到的原文仍按你的 iMessage 开关转发；未转发成功不删除。",
+                            11,
+                            True,
+                        ),
+                    ]
+                ),
+            ],
+        )
+
+    @objc.python_method
     def _preferences_page(self):
+        self._login = AppKit.NSSwitch.alloc().init()
+        self._login.setAccessibilityLabel_("登录时启动 4G Bridge")
+        self._login.setTarget_(self)
+        self._login.setAction_("loginChanged:")
+        self._login_status = label("读取系统登录项状态", 11, True)
         self._auto_enabled = AppKit.NSSwitch.alloc().init()
         self._auto_enabled.setAccessibilityLabel_("Wi-Fi 故障自动接管")
         self._data_limit = AppKit.NSTextField.alloc().init()
@@ -396,7 +556,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                         self._budget_usage,
                         self._policy_status,
                         label(
-                            "连续 3 次断网检测后接管；Wi-Fi 恢复后关闭 4G。VPN 存在时暂缓。\n"
+                            "Wi-Fi 明确断开时快速接管，互联网故障需连续确认；VPN 配置不变。\n"
                             "到顶锁定，重启或跨月不会解锁。手动追加相同额度后才能继续。\n"
                             "本机计量，非运营商账单；采样和断开存在延迟，可能超额。",
                             11,
@@ -409,7 +569,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                     [
                         section_title("外观", "circle.lefthalf.filled"),
                         self._appearance,
-                        label("使用 macOS 系统字体、语义色和原生控件。", 12, True),
+                        stack([label("登录时启动", 12), self._login, self._login_status], True),
                     ]
                 ),
                 group(
@@ -429,9 +589,28 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def refresh(self, include_target=True):
+        self.refresh_logs()
+        self._carrier_policy.setStringValue_(self._delegate.carrier_policy_status())
+        login_state, login_text = self._delegate.login_status()
+        self._login.setState_(int(login_state == 1))
+        self._login_status.setStringValue_(login_text)
+        carrier_busy, carrier_status, allowance = self._delegate.carrier_state()
+        self._carrier_button.setEnabled_(not carrier_busy)
+        self._carrier_note.setStringValue_(carrier_status)
+        self._carrier_remaining.setStringValue_(
+            f"{allowance.amount} {allowance.unit}" if allowance else "—"
+        )
+        self._carrier_updated.setStringValue_(
+            f"{allowance.timestamp:%m-%d %H:%M} · {allowance.sender} · 仅本次运行缓存"
+            if allowance
+            else "等待明确的剩余流量回复；未识别时请在“信息”查看原文。"
+        )
+        self.refresh_app_network()
         diagnostic = getattr(self._delegate, "diagnostic_mode", False)
         self.window().setTitle_("4G Bridge · 短信测试模式" if diagnostic else "4G Bridge")
         settings, used, policy_status = self._delegate.data_policy()
+        self._data_limit.setEnabled_(not settings.carrier_policy_enabled)
+        self._budget_period.setEnabled_(not settings.carrier_policy_enabled)
         if include_target:
             self._auto_enabled.setState_(int(settings.auto_data_enabled))
             self._data_limit.setStringValue_(
@@ -561,6 +740,32 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._refresh_traffic()
 
     @objc.python_method
+    def refresh_app_network(self):
+        rows, status, paused = self._delegate.app_network_state()
+        self._app_table.update(rows)
+        self._app_network_status.setStringValue_(status)
+        self._app_pause.setTitle_("继续观测" if paused else "暂停观测")
+
+    @objc.IBAction
+    def toggleAppNetwork_(self, _sender):
+        self._delegate.toggle_app_network()
+
+    @objc.IBAction
+    def carrierPolicy_(self, _sender):
+        self._delegate.toggle_carrier_policy()
+        self.refresh(False)
+
+    @objc.IBAction
+    def queryCarrier_(self, _sender):
+        self._delegate.query_carrier(
+            self._carrier_number.titleOfSelectedItem(), self._carrier_command.stringValue().strip()
+        )
+
+    @objc.IBAction
+    def loginChanged_(self, _sender):
+        self._delegate.set_login_enabled(bool(self._login.state()))
+
+    @objc.python_method
     def _refresh_traffic(self):
         sample, usage = self._delegate.traffic_state()
         self._history.add(sample)
@@ -608,10 +813,15 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.IBAction
     def saveDataPolicy_(self, _sender):
+        if self._delegate.data_policy()[0].carrier_policy_enabled:
+            self._delegate._show_alert(
+                "正在使用运营商套餐保护", "请到运营商页管理 80% / 98% 保护与自动接管。"
+            )
+            return
         enabled = bool(self._auto_enabled.state())
         if enabled and not self._confirm(
             "允许 Wi-Fi 故障时自动使用 SIM 流量？",
-            "将每 15 秒对 Apple／Microsoft 的连接测试地址进行绑定 Wi-Fi 的轻量检查。"
+            "以约 2 秒间隔检查 Wi-Fi；明确断开直接请求接管，联网探测自身有超时等待。"
             "连续失败后临时提高 QDC507 优先级，恢复后还原。"
             "网卡无法恢复时，最多重启模块一次，可能短暂中断短信接收；失败即暂停。"
             "仅在应用运行时保护流量；不会更改 VPN、DNS 或 Wi-Fi 开关。",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import suppress
 from dataclasses import replace
 from importlib import resources
@@ -11,6 +12,7 @@ import Foundation
 from PyObjCTools import AppHelper
 
 from fourg_bridge.app.auto_data import AutoDataMonitor
+from fourg_bridge.app.login_item import LoginItem
 from fourg_bridge.app.runtime import ModemRuntime
 from fourg_bridge.cellular.data_control import NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
@@ -25,12 +27,14 @@ from fourg_bridge.models import (
     RelayStatus,
 )
 from fourg_bridge.modem.usb_discovery import USBDiscovery
+from fourg_bridge.network.app_traffic import AppTrafficTracker, read_counters
 from fourg_bridge.network.failover import Action
 from fourg_bridge.network.traffic import TrafficLedger
 from fourg_bridge.storage.budget import BudgetStore
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
 from fourg_bridge.storage.settings import SettingsStore
+from fourg_bridge.support.event_log import EventLog
 from fourg_bridge.support.privacy import redact_identifier
 from fourg_bridge.ui.menu_bar import MenuBarController
 from fourg_bridge.ui.settings_window import SettingsWindowController
@@ -39,6 +43,10 @@ from fourg_bridge.ui.settings_window import SettingsWindowController
 class ApplicationController:
     def __init__(self, *, diagnostic_mode: bool = False) -> None:
         self.diagnostic_mode = diagnostic_mode
+        self._events = EventLog()
+        self._events.add("start")
+        self._reply_logged = False
+        self._relay_wait_logged = False
         support = Path.home() / "Library" / "Application Support" / "4G Bridge"
         self._settings_store = SettingsStore(support / "settings.json")
         self._settings = self._settings_store.load()
@@ -55,6 +63,15 @@ class ApplicationController:
         self._bridge_busy = False
         self._bridge_status = "尚未检查 iMessage；连接检查不会发送消息。"
         self._runtime: ModemRuntime | None = None
+        self._login_item = LoginItem()
+        self._app_tracker = AppTrafficTracker()
+        self._app_rows = ()
+        self._app_network_status = "打开应用网络或菜单面板后开始观测；只在内存保留。"
+        self._app_network_busy = False
+        self._app_network_paused = False
+        self._carrier_status = "手动发送查询短信后等待运营商回复；不会自动定时查询。"
+        self._carrier_busy = False
+        self._carrier_resume = False
         self._runtime_lock = threading.RLock()
         self._menu = MenuBarController.alloc().initWithDelegate_(self)
         self._settings_window = SettingsWindowController.alloc().initWithDelegate_(self)
@@ -84,13 +101,231 @@ class ApplicationController:
         self.rescan()
 
     def timerFired_(self, _timer) -> None:
+        self.refresh_app_network()
+        self.rescan()
+
+    def app_network_state(self):
+        return self._app_rows, self._app_network_status, self._app_network_paused
+
+    def event_log(self, warnings_only=False):
+        return self._events.text(warnings_only)
+
+    def clear_event_log(self):
+        self._events.clear()
+
+    def _event(self, code):
+        if hasattr(self, "_events"):
+            self._events.add(code)
+
+    def refresh_app_network(self) -> None:
+        visible = self._menu._popover.isShown() or (
+            self._settings_window.window().isVisible()
+            and self._settings_window._tabs.selectedTabViewItemIndex() == 5
+        )
+        if not visible or self._app_network_paused or self.diagnostic_mode:
+            if not self._app_network_busy:
+                self._app_tracker.pause()
+                self._app_rows = ()
+            return
+        if self._app_network_busy:
+            return
+        self._app_network_busy = True
+
+        def worker():
+            try:
+                rows = self._app_tracker.sample(read_counters(), time.monotonic())
+                status = f"{len(rows)} 个进程 · 每 5 秒更新 · 所有网络汇总（含回环）"
+            except Exception:
+                self._app_tracker.pause()
+                rows, status = (), "系统暂未提供应用计数；不会申请提权或显示演示数据。"
+            AppHelper.callAfter(self._apply_app_network, rows, status)
+
+        threading.Thread(target=worker, name="App-Network-Counters", daemon=True).start()
+
+    def _apply_app_network(self, rows, status):
+        self._app_network_busy = False
+        self._app_rows = () if self._app_network_paused else rows
+        self._app_network_status = "观测已暂停" if self._app_network_paused else status
+        self._settings_window.refresh_app_network()
+        self._menu._panel.refresh(self._snapshot)
+
+    def toggle_app_network(self):
+        self._app_network_paused = not self._app_network_paused
+        if self._app_network_paused:
+            self._app_rows = ()
+            self._app_network_status = "观测已暂停；累计仅在本次运行保留。"
+        self._settings_window.refresh_app_network()
+        self.refresh_app_network()
+
+    def show_app_network(self):
+        self._settings_window._tabs.setSelectedTabViewItemIndex_(5)
+        self.show_settings()
+        self.refresh_app_network()
+
+    def login_status(self):
+        state = self._login_item.status()
+        return state, {
+            0: "已关闭",
+            1: "已开启",
+            2: "等待系统批准：请检查系统设置 → 通用 → 登录项",
+            3: "尚未注册；建议先将应用移到“应用程序”",
+        }.get(state, "系统登录项服务不可用")
+
+    def set_login_enabled(self, enabled):
+        self._event("login")
+        ok, state = self._login_item.set_enabled(enabled)
+        if not ok:
+            self._show_alert(
+                "未能更新登录项",
+                "请将应用放入“应用程序”，并检查系统设置中的登录项。未更改 4G 数据开关。",
+            )
+        elif state == 2:
+            self._show_alert("需要系统批准", "请在系统设置 → 通用 → 登录项中允许 4G Bridge。")
+        self._settings_window.refresh(False)
+
+    def carrier_state(self):
+        allowance = getattr(self._runtime, "carrier_allowance", None)
+        status = self._carrier_status
+        if getattr(self._runtime, "carrier_reply_received", False):
+            status = "已收到运营商回复；无法明确识别的套餐信息请在“信息”查看原文。"
+        return self._carrier_busy, status, allowance
+
+    def carrier_usage(self):
+        if self._settings.carrier_policy_enabled and getattr(self, "_auto_data", None):
+            try:
+                return self._auto_data.carrier_budget.usage()
+            except Exception:
+                return None
+        return getattr(self._runtime, "carrier_usage", None)
+
+    def carrier_policy_status(self):
+        if not self._settings.carrier_policy_enabled:
+            return "未启用套餐比例保护"
+        try:
+            state = self._auto_data.carrier_budget.status()
+            description = {
+                "ready": "允许使用",
+                "confirmation": "已达 80%，再次开启需确认",
+                "locked": "已达 98%，数据已锁定",
+                "unknown": "等待完整套餐数据",
+                "stale": "套餐查询已超过 6 小时，请重新查询",
+            }[state.state]
+            percent = f"估算已用 {state.used / state.total:.1%} · " if state.total else ""
+            return (
+                percent
+                + description
+                + (" · 自动接管已开启" if self._settings.auto_data_enabled else " · 自动接管已关闭")
+            )
+        except Exception:
+            return "套餐计量不可用，禁止自动开启"
+
+    def toggle_carrier_policy(self):
+        if self._settings.carrier_policy_enabled and self._settings.auto_data_enabled:
+            self._settings = replace(self._settings, auto_data_enabled=False)
+            self._settings_store.save(self._settings)
+            self._start_data_change(False)
+            return
+        usage = self.carrier_usage()
+        if not usage or not self._auto_data.carrier_budget:
+            self._show_alert("需要套餐数据", "请先查询运营商，并确认总量和已用量已被识别。")
+            return
+        self._auto_data.carrier_budget.update_plan(usage)
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("启用 80% / 98% 套餐保护？")
+        alert.setInformativeText_(
+            "Wi-Fi 断开或无互联网时自动请求 4G 接管；80% 前不限速，80% 起需确认，98% 自动关闭。\n"
+            "使用运营商快照＋本机新增流量估算，不是实时账单。查询超过 6 小时会暂停，需手动查询；"
+            "不会后台发送收费短信。不会关闭 VPN；VPN 自身仍需支持网络切换。"
+        )
+        alert.addButtonWithTitle_("启用保护与自动接管")
+        alert.addButtonWithTitle_("取消")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        self._settings = replace(
+            self._settings, carrier_policy_enabled=True, auto_data_enabled=True
+        )
+        self._settings_store.save(self._settings)
+        self._auto_data.reset()
+        self._settings_window.refresh(False)
+
+    def _carrier_consent(self):
+        if not self._auto_data.carrier_budget:
+            self._show_alert("套餐计量不可用", "无法开启数据，请检查本机计量数据库。")
+            return False
+        state = self._auto_data.carrier_budget.status()
+        if state.state == "ready":
+            return True
+        if state.state != "confirmation":
+            self._show_alert("暂不能开启 4G", self.carrier_policy_status())
+            return False
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("套餐已使用超过 80%")
+        alert.setInformativeText_(
+            self.carrier_policy_status() + "\n确认后仅允许本次连接，达到 98% 仍会自动关闭。"
+        )
+        alert.addButtonWithTitle_("确认继续本次连接")
+        alert.addButtonWithTitle_("保持关闭")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            self._auto_data.policy.paused = True
+            return False
+        self._auto_data.carrier_budget.approved = True
+        return True
+
+    def query_carrier(self, number, command):
+        from fourg_bridge.cellular.carrier_query import query_pdu
+
+        if self._carrier_busy or self.diagnostic_mode or self._runtime is None:
+            self._show_alert("暂时无法查询", "请先连接模块并退出测试模式。")
+            return
+        try:
+            query_pdu(number, command)
+        except ValueError as error:
+            self._show_alert("查询参数无效", str(error))
+            return
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("发送运营商流量查询短信？")
+        alert.setInformativeText_(
+            f"向 {number} 发送：{command}\n可能产生短信费用，不开启 4G 数据。"
+            "指令因地区及套餐而异，请核实；不会自动重试或定时发送。"
+        )
+        alert.addButtonWithTitle_("发送一次")
+        alert.addButtonWithTitle_("取消")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        self._carrier_busy = True
+        self._reply_logged = False
+        self._event("query")
+        self._carrier_status = "正在发送一次查询，请勿重复操作…"
+        self._settings_window.refresh(False)
+
+        def worker():
+            try:
+                with self._runtime_lock:
+                    status = (
+                        self._runtime.query_carrier(number, command)
+                        if self._runtime
+                        else "模块已断开，未发送。"
+                    )
+            except Exception:
+                status = "查询未完成；发送结果不确定，请先等待回复，不要立即重试。"
+            AppHelper.callAfter(self._carrier_finished, status)
+
+        threading.Thread(target=worker, name="Carrier-Query", daemon=True).start()
+
+    def _carrier_finished(self, status):
+        self._event("query_end")
+        self._carrier_busy = False
+        self._carrier_status = status
+        self._settings_window.refresh(False)
         self.rescan()
 
     def workspaceDidSleep_(self, _notification) -> None:
+        self._event("sleep")
         self._auto_data.suspended = True
         self._force_data_off("sleep")
 
     def workspaceDidWake_(self, _notification) -> None:
+        self._event("wake")
         self._force_data_off("wake")
         self._auto_data.reset()
         self._auto_data.suspended = False
@@ -131,14 +366,21 @@ class ApplicationController:
                         self._runtime = ModemRuntime(self._discovery, self._database, self._bridge)
                     # SMS relay has no data-state, default-interface, Wi-Fi,
                     # failover or quota gate. Messages uses the Mac's network.
+                    relay_ready = False
                     if self._settings.relay_enabled:
                         prerequisite = self._bridge.target_status()
                         if prerequisite.accepted:
-                            recent = self._runtime.poll_sms()
-                            if recent:
-                                AppHelper.callAfter(self._apply_recent_relay, recent)
+                            relay_ready = True
                         else:
                             AppHelper.callAfter(self._relay_waiting, prerequisite)
+                    if (
+                        relay_ready
+                        or getattr(self._runtime, "carrier_pending", False)
+                        or getattr(self._runtime, "carrier_cache_pending", False)
+                    ):
+                        recent = self._runtime.poll_sms(relay_enabled=relay_ready)
+                        if recent:
+                            AppHelper.callAfter(self._apply_recent_relay, recent)
                     snapshot = self._runtime.snapshot()
                     AppHelper.callAfter(
                         self._apply_traffic,
@@ -162,9 +404,28 @@ class ApplicationController:
             self._rescan_lock.release()
 
     def _apply_snapshot(self, snapshot: ModemSnapshot) -> None:
+        usage = getattr(self._runtime, "carrier_usage", None)
+        if usage and getattr(self, "_auto_data", None) and self._auto_data.carrier_budget:
+            try:
+                self._auto_data.carrier_budget.update_plan(usage)
+            except Exception:
+                self._auto_data.error = True
         if self._data_busy:
             snapshot = replace(snapshot, data_state=self._snapshot.data_state)
         previously_connected = self._snapshot.descriptor is not None
+        if previously_connected != (snapshot.descriptor is not None):
+            self._event("connected" if snapshot.descriptor else "missing")
+        if self._snapshot.data_state != snapshot.data_state:
+            self._event(
+                {DataState.ON: "data_on", DataState.OFF: "data_off"}.get(
+                    snapshot.data_state, "data_transition"
+                )
+            )
+        if snapshot.warning and snapshot.warning != self._snapshot.warning:
+            self._event("warning")
+        if getattr(self._runtime, "carrier_reply_received", False) and not self._reply_logged:
+            self._event("reply")
+            self._reply_logged = True
         self._snapshot = snapshot
         if snapshot.descriptor is None:
             self._apply_traffic(None, self._traffic_usage)
@@ -186,10 +447,16 @@ class ApplicationController:
         return self._traffic_snapshot, self._traffic_usage
 
     def _apply_recent_relay(self, recent: str) -> None:
+        if recent != self._recent_relay:
+            self._event("relay")
+        self._relay_wait_logged = False
         self._recent_relay = recent
         self._menu.setRelayStatus_recent_(self._settings.relay_enabled, recent)
 
     def _relay_waiting(self, result: RelayResult) -> None:
+        if not getattr(self, "_relay_wait_logged", False):
+            self._event("relay_wait")
+            self._relay_wait_logged = True
         if not self._bridge_busy:
             self._bridge_status = "自动转发等待配置：" + self._relay_error_message(result)
 
@@ -284,6 +551,8 @@ class ApplicationController:
     def _start_data_change(self, enabled: bool, *, automatic: bool = False) -> None:
         if self.diagnostic_mode:
             return
+        if enabled and self._settings.carrier_policy_enabled and not self._carrier_consent():
+            return
         if enabled and not self._auto_data.ready():
             return
         self._data_epoch += 1
@@ -336,7 +605,15 @@ class ApplicationController:
             self._show_alert("4G 未能连接", detail)
         self.rescan()
 
+        if not requested_on and state == DataState.OFF and self._settings.carrier_policy_enabled:
+            self._auto_data.carrier_budget.approved = False
+            if self._carrier_resume:
+                self._carrier_resume = False
+                self._start_data_change(True, automatic=True)
+
     def _force_data_off(self, _reason: str) -> None:
+        if getattr(self, "_auto_data", None) and self._auto_data.carrier_budget:
+            self._auto_data.carrier_budget.approved = False
         self._data_epoch += 1
         if self._runtime:
             self._runtime.cancel_pending_enable()
@@ -567,7 +844,11 @@ class ApplicationController:
         self._timer.invalidate()
 
     def data_policy(self):
+        if not hasattr(self, "_auto_data"):
+            return self._settings, 0, "正在启动流量保护"
         monitor = self._auto_data
+        if self._settings.carrier_policy_enabled:
+            return self._settings, 0, self.carrier_policy_status()
         available = monitor.ready()
         status = monitor.status if self._settings.auto_data_enabled else "自动接管未开启"
         if not available:
@@ -606,6 +887,11 @@ class ApplicationController:
         return True
 
     def grant_data_allowance(self):
+        if self._settings.carrier_policy_enabled:
+            self._show_alert(
+                "套餐保护已生效", "98% 上限不能用追加固定额度绕过。请在运营商页查看套餐状态。"
+            )
+            return
         try:
             self._auto_data.budget.grant(self._settings.data_limit_bytes, user_confirmed=True)
         except Exception:
@@ -626,6 +912,8 @@ class ApplicationController:
             return
         if action == Action.ENABLE and not self._auto_data.ready():
             return
+        if action == Action.ENABLE:
+            self._event("auto")
         self._start_data_change(action == Action.ENABLE, automatic=True)
 
     def stop_for_budget(self):
@@ -648,4 +936,7 @@ class ApplicationController:
     def _budget_stopped(self):
         if self._snapshot.data_state == DataState.DISABLING:
             return
+        if self._settings.carrier_policy_enabled and self._auto_data.carrier_budget:
+            self._carrier_resume = self._auto_data.carrier_budget.status().state == "confirmation"
+            self._event("carrier80" if self._carrier_resume else "carrier98")
         self._start_data_change(False)

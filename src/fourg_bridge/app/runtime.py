@@ -4,8 +4,9 @@ import subprocess
 import time
 from contextlib import suppress
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from fourg_bridge.cellular.carrier_query import parse_allowance, parse_usage, send_query
 from fourg_bridge.cellular.data_control import ModemAttachControl, NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.models import DataState, ModemSnapshot, RelayStatus
@@ -37,6 +38,14 @@ class ModemRuntime:
         self._database = database
         self._bridge = bridge
         self._enable_cancelled = False
+        self.carrier_allowance = None
+        self.carrier_usage = None
+        self.carrier_reply_received = False
+        self.carrier_cache_pending = True
+        self._carrier_cache_at = None
+        self._carrier_deadline = 0.0
+        self._carrier_requested_at = None
+        self._carrier_number = None
         self._session: USBModemSession = USBSessionFactory(discovery).connect(descriptor)
         self._controller = ModemController(discovery, self._session.transport)
         self._receiver = SMSReceiver(self._session.transport)
@@ -95,9 +104,25 @@ class ModemRuntime:
         self.traffic_usage = self._traffic_ledger.usage()
         return snapshot
 
-    def poll_sms(self) -> str | None:
+    @property
+    def carrier_pending(self):
+        return time.monotonic() < self._carrier_deadline
+
+    def query_carrier(self, number, command):
+        if self.carrier_pending:
+            return "仍在等待上次回复，最多等待 10 分钟；没有重复发送。"
+        self._carrier_requested_at = datetime.now().astimezone().replace(microsecond=0)
+        self.carrier_reply_received = False
+        self.carrier_allowance = None
+        self.carrier_usage = None
+        self._carrier_number = number
+        self._carrier_deadline = time.monotonic() + 600
+        return send_query(self._session.transport, number, command, confirmed=True)
+
+    def poll_sms(self, *, relay_enabled: bool = True) -> str | None:
         recent: str | None = None
-        self._relay.retry_cleanup()
+        if relay_enabled:
+            self._relay.retry_cleanup()
         for raw in self._receiver.poll():
             try:
                 part = decode_pdu(raw)
@@ -106,10 +131,40 @@ class ModemRuntime:
             message = self._assembler.add(part)
             if message is None:
                 continue
+            if (
+                message.sender in ("10001", "10086", "10010")
+                and message.timestamp
+                >= (
+                    getattr(self, "_carrier_requested_at", None)
+                    or datetime.now().astimezone() - timedelta(days=1)
+                )
+                and (
+                    getattr(self, "_carrier_number", None) is None
+                    or message.sender == self._carrier_number
+                )
+                and (
+                    getattr(self, "_carrier_cache_at", None) is None
+                    or message.timestamp >= self._carrier_cache_at
+                )
+            ):
+                self.carrier_reply_received = True
+                self._carrier_cache_at = message.timestamp
+                allowance = parse_allowance(message.sender, message.body, message.timestamp)
+                usage = parse_usage(message.sender, message.body, message.timestamp)
+                if usage:
+                    self.carrier_usage = usage
+                else:
+                    self.carrier_usage = None
+                if allowance:
+                    self.carrier_allowance = allowance
+                    self._carrier_deadline = 0
+            if not relay_enabled:
+                continue  # Query replies stay on the module until successfully relayed.
             record = self._relay.enqueue(message)
             if record.status in (RelayStatus.SENT, RelayStatus.CLEANUP_PENDING):
                 time = datetime.fromisoformat(record.timestamp).astimezone().strftime("%H:%M")
                 recent = f"{time} / {redact_identifier(record.sender)}"
+        self.carrier_cache_pending = False
         return recent
 
     def set_data(

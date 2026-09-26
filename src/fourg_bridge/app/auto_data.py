@@ -17,12 +17,19 @@ from fourg_bridge.network.connectivity import WiFiProbe
 from fourg_bridge.network.ecm import ECMDetector
 from fourg_bridge.network.failover import Action, FailoverPolicy, Observation
 from fourg_bridge.network.traffic import TrafficMonitor
+from fourg_bridge.storage.carrier_budget import CarrierBudgetStore
 
 
 class AutoDataMonitor:
     def __init__(self, controller, budget):
         self.controller = controller
         self.budget = budget
+        try:
+            self.carrier_budget = CarrierBudgetStore(
+                controller._settings_store.path.parent / "carrier-budget.sqlite"
+            )
+        except Exception:
+            self.carrier_budget = None
         self.policy = FailoverPolicy()
         self.lock = threading.RLock()
         self.stop = threading.Event()
@@ -47,6 +54,9 @@ class AutoDataMonitor:
     def ready(self):
         settings = self.controller._settings
         try:
+            if settings.carrier_policy_enabled:
+                state = self.carrier_budget.status().state
+                return not self.error and state in ("ready", "confirmation")
             self.budget_status = self.budget.status(settings.data_limit_bytes)
             if settings.data_limit_bytes <= 0:
                 # Corrupt/missing settings must not bypass a previously used cap.
@@ -79,9 +89,16 @@ class AutoDataMonitor:
     def _sample(self):
         settings = self.controller._settings
         snapshot = self.controller.current_snapshot()
-        if not snapshot.interface or settings.data_limit_bytes <= 0:
+        if not snapshot.interface or (
+            settings.data_limit_bytes <= 0 and not settings.carrier_policy_enabled
+        ):
             return
         sample = self._traffic.sample(snapshot.interface)
+        if settings.carrier_policy_enabled:
+            self.carrier_budget.observe(
+                sample.interface, self._boot, sample.rx_bytes, sample.tx_bytes
+            )
+            return
         self.budget_status = self.budget.observe(
             sample.interface,
             self._boot,
@@ -94,7 +111,9 @@ class AutoDataMonitor:
     def _guard(self):
         while not self.stop.is_set():
             settings = self.controller._settings
-            if settings.data_limit_bytes > 0 and not self.suspended:
+            if (
+                settings.data_limit_bytes > 0 or settings.carrier_policy_enabled
+            ) and not self.suspended:
                 try:
                     self.sample()
                 except Exception:
@@ -112,7 +131,10 @@ class AutoDataMonitor:
                     if not safely_restarting:
                         self.error = True
                 snapshot = self.controller.current_snapshot()
-                if not self.ready() and snapshot.data_state in (
+                permitted = self.ready()
+                if settings.carrier_policy_enabled:
+                    permitted = permitted and self.carrier_budget.status().state == "ready"
+                if not permitted and snapshot.data_state in (
                     DataState.ON,
                     DataState.ENABLING,
                     DataState.PROTECTION_FAILED,
@@ -146,8 +168,15 @@ class AutoDataMonitor:
                     interface = probe.interface()
                     vpn = ECMDetector.has_vpn()
                     default = ECMDetector.default_interface()
-                    other = bool(default and default not in (interface, snapshot.interface))
-                    wifi_online = None if vpn or other else probe.online(interface)
+                    other = bool(
+                        default
+                        and not default.startswith("utun")
+                        and default not in (interface, snapshot.interface)
+                    )
+                    disconnected = probe.disconnected(interface)
+                    wifi_online = (
+                        None if other else False if disconnected else probe.online(interface)
+                    )
                     observation = Observation(
                         True,
                         True,
@@ -156,13 +185,16 @@ class AutoDataMonitor:
                         wifi_online,
                         vpn,
                         other,
+                        disconnected,
                     )
                     with self.lock:
                         action = self.policy.decide(observation)
                         if not self.policy.paused:
                             self.status = (
-                                "VPN／其他优先网络存在，自动接管暂缓。"
-                                if vpn or other
+                                "其他优先网络存在，自动接管暂缓。"
+                                if other
+                                else "Wi-Fi 已断开，立即请求 4G 接管；连接建立仍需等待模块。"
+                                if disconnected and action == Action.ENABLE
                                 else "Wi-Fi 可用，优先使用 Wi-Fi。"
                                 if wifi_online
                                 else "正在使用 4G 接管。"
@@ -178,4 +210,4 @@ class AutoDataMonitor:
             else:
                 with self.lock:
                     self.policy.reset()
-            self.stop.wait(15)
+            self.stop.wait(2)

@@ -15,6 +15,7 @@ class Settings:
     auto_data_enabled: bool = False
     data_limit_bytes: int = 0
     data_budget_period: str = "allowance"
+    carrier_policy_enabled: bool = False
 
 
 class SettingsStore:
@@ -30,6 +31,7 @@ class SettingsStore:
                 poll_interval_seconds=max(10, int(payload.get("poll_interval_seconds", 20))),
                 appearance=appearance if appearance in ("system", "light", "dark") else "system",
                 auto_data_enabled=payload.get("auto_data_enabled") is True,
+                carrier_policy_enabled=payload.get("carrier_policy_enabled") is True,
                 data_limit_bytes=max(0, int(payload.get("data_limit_bytes", 0))),
                 data_budget_period=(
                     "month" if payload.get("data_budget_period") == "month" else "allowance"

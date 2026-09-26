@@ -9,6 +9,7 @@ from pathlib import Path
 import AppKit
 import Foundation
 
+from fourg_bridge.cellular.carrier_query import CarrierUsage
 from fourg_bridge.models import (
     DataState,
     DeviceDescriptor,
@@ -18,6 +19,7 @@ from fourg_bridge.models import (
     SIMState,
     TrafficSnapshot,
 )
+from fourg_bridge.network.app_traffic import AppTraffic
 from fourg_bridge.network.traffic import TrafficUsage
 from fourg_bridge.storage.settings import Settings
 from fourg_bridge.ui.badge_preview import render_badge_preview
@@ -46,6 +48,31 @@ class PreviewDelegate:
 
     def relay_enabled(self):
         return False
+
+    def app_network_state(self):
+        return (
+            (AppTraffic(0, "Preview App", 12000, 3000, 150000),),
+            "界面测试数据 · 非实机流量",
+            False,
+        )
+
+    def carrier_state(self):
+        return False, "尚未发送查询", None
+
+    def carrier_usage(self):
+        return CarrierUsage(60 * 1024**3, 12 * 1024**3, datetime.now().astimezone())
+
+    def carrier_policy_status(self):
+        return "界面测试：80% 确认，98% 停止 · 非真实套餐"
+
+    def login_status(self):
+        return 0, "已关闭"
+
+    def event_log(self, warnings_only=False):
+        return "[信息] [系统] 界面测试事件 · 非实机日志" if not warnings_only else ""
+
+    def clear_event_log(self):
+        pass
 
     def data_policy(self):
         return Settings(), 0, "自动接管未开启；请先设置有限额度。"
@@ -132,7 +159,7 @@ def run(output: Path) -> None:
                 AppKit.NSBitmapImageFileTypePNG, {}
             ).writeToFile_atomically_(str(output / f"{appearance}-menubar-{state.value}.png"), True)
         menu.update_(delegate.snapshot)
-        for index in range(5):
+        for index in range(8):
             window._tabs.setSelectedTabViewItemIndex_(index)
             Foundation.NSRunLoop.currentRunLoop().runUntilDate_(
                 Foundation.NSDate.dateWithTimeIntervalSinceNow_(0.15)
@@ -189,5 +216,13 @@ def run(output: Path) -> None:
     menu.update_(delegate.snapshot)
     assert window.window().title() == "4G Bridge"
     assert window._rescan.title() == "重新检测"
-    print("UI_SMOKE_OK: menu, five pages, light/dark, states and safe interactions", flush=True)
+    assert len(window._tabs.tabViewItems()) == 8
+    assert window._app_table.table.numberOfRows() == 1
+    assert window._login.state() == 0
+    assert window._carrier_command.stringValue() == "108"
+    assert not window._log_text.isEditable()
+    assert menu._panel._ring.value.stringValue() == "20.0%"
+    menu._panel._ring.update(None)
+    assert menu._panel._ring.value.stringValue() == "—"
+    print("UI_SMOKE_OK: menu, eight pages, light/dark, states and safe interactions", flush=True)
     window.window().orderOut_(None)

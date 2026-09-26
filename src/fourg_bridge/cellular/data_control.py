@@ -86,7 +86,27 @@ class NetworkSetupControl:
         )
 
     def verify_cellular_default(self) -> bool:
-        return self._interface is not None and ECMDetector.default_interface() == self._interface
+        if self._interface is None:
+            return False
+        default = ECMDetector.default_interface()
+        if default == self._interface:
+            return True
+        if default and default.startswith("utun"):
+            # Do not demand removal of a VPN's default route. Verify the modem's
+            # scoped route only; the VPN provider still owns tunnel migration.
+            route = ECMDetector._run(
+                "/sbin/route",
+                "-n",
+                "get",
+                "-ifscope",
+                self._interface,
+                "default",
+                allow_failure=True,
+            )
+            interface = re.search(r"^\s*interface:\s*(\S+)", route, re.M)
+            gateway = re.search(r"^\s*gateway:\s*(\d+\.\d+\.\d+\.\d+)", route, re.M)
+            return bool(interface and interface.group(1) == self._interface and gateway)
+        return False
 
     @staticmethod
     def verify_wifi_default() -> bool:

@@ -21,6 +21,7 @@ class Observation:
     wifi_online: bool | None
     vpn_active: bool = False
     other_default: bool = False
+    wifi_disconnected: bool = False
 
 
 class FailoverPolicy:
@@ -42,7 +43,7 @@ class FailoverPolicy:
         if not observation.enabled or self.paused or not observation.device_available:
             self.reset()
             return Action.DISABLE if self.owned and observation.data_on else Action.HOLD
-        if observation.vpn_active or observation.other_default:
+        if observation.other_default:
             self.reset()
             return Action.DISABLE if self.owned and observation.data_on else Action.HOLD
         if observation.wifi_online is None:
@@ -56,7 +57,7 @@ class FailoverPolicy:
         else:
             self.successes = 0
             self.failures += 1
-            if not observation.data_on and self.failures >= 3:
+            if not observation.data_on and (observation.wifi_disconnected or self.failures >= 3):
                 return Action.ENABLE
         return Action.HOLD
 

@@ -25,13 +25,39 @@ def test_debounce_and_wifi_recovery():
     assert not policy.owned
 
 
-@pytest.mark.parametrize("field", ["vpn_active", "other_default"])
+@pytest.mark.parametrize("field", ["other_default"])
 def test_never_reorders_vpn_or_other_default(field):
     policy = FailoverPolicy()
     blocked = replace(DOWN, **{field: True})
     assert all(policy.decide(blocked) == Action.HOLD for _ in range(5))
     policy.completed(Action.ENABLE, True)
     assert policy.decide(replace(blocked, data_on=True)) == Action.DISABLE
+
+
+def test_disconnected_radio_takes_over_immediately_with_vpn_preserved():
+    policy = FailoverPolicy()
+    assert policy.decide(replace(DOWN, wifi_disconnected=True, vpn_active=True)) == Action.ENABLE
+    assert (
+        policy.decide(replace(DOWN, wifi_disconnected=True, budget_available=False)) == Action.HOLD
+    )
+    assert policy.decide(replace(DOWN, wifi_disconnected=True, enabled=False)) == Action.HOLD
+
+
+def test_disconnected_probe_reads_link_not_cached_address(monkeypatch):
+    monkeypatch.setattr(ECMDetector, "_run", lambda *a: "en0:\n\tstatus: inactive\n")
+    assert WiFiProbe().disconnected("en0")
+    assert WiFiProbe().disconnected(None)
+    monkeypatch.setattr(ECMDetector, "_run", lambda *a: "en0:\n\tstatus: active\n")
+    assert not WiFiProbe().disconnected("en0")
+
+
+def test_vpn_default_does_not_require_tunnel_removal(monkeypatch):
+    from fourg_bridge.cellular.data_control import NetworkSetupControl
+
+    monkeypatch.setattr(ECMDetector, "default_interface", lambda: "utun4")
+    monkeypatch.setattr(ECMDetector, "_run", lambda *a, **kw: "interface: en11\ngateway: 192.0.2.1")
+    assert NetworkSetupControl("en11").verify_cellular_default()
+    assert not NetworkSetupControl("en12").verify_cellular_default()
 
 
 def test_cap_blocks_even_manual_data_and_disabled_policy():
@@ -149,3 +175,31 @@ def test_probe_failure_portal_and_second_endpoint(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", timeout)
     assert not probe.online("en0")
+
+
+def test_wifi_fake_dns_fallback_is_bound_and_does_not_change_system_dns(monkeypatch):
+    import json
+
+    monkeypatch.setattr(ECMDetector, "ipv4", lambda _: "192.0.2.2")
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        if "dns.alidns.com/resolve" in args[-1]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {"Status": 0, "Answer": [{"type": 1, "TTL": 60, "data": "8.8.8.8"}]}
+                ).encode(),
+            )
+        return SimpleNamespace(
+            returncode=0, stdout=b"<BODY>Success</BODY>" if "--resolve" in args else b""
+        )
+
+    monkeypatch.setattr("subprocess.run", run)
+    probe = WiFiProbe()
+    assert probe.online("en5")
+    assert len(calls) == 3
+    assert all("if!en5" in args and "--noproxy" in args for args in calls)
+    calls.clear()
+    assert probe.online("en5") and len(calls) == 1

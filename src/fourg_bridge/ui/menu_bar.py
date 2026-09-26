@@ -25,7 +25,7 @@ class MenuBarController(AppKit.NSObject):
         self._popover = AppKit.NSPopover.alloc().init()
         self._popover.setContentViewController_(self._panel)
         self._popover.setBehavior_(AppKit.NSPopoverBehaviorTransient)
-        self._popover.setContentSize_(AppKit.NSMakeSize(380, 510))
+        self._popover.setContentSize_(AppKit.NSMakeSize(380, 740))
         self._panel._popover = self._popover
         button = self._status_item.button()
         button.setTitle_("")
@@ -84,6 +84,8 @@ class MenuBarController(AppKit.NSObject):
         self._add_value("month", "本月流量", "—")
         self._menu = parent
         self._add_action("设置…", "showSettings:", ",")
+        self._add_action("应用网络…", "showAppNetwork:")
+        self._add_action("查询运营商流量…", "showCarrier:")
         self._add_action("重新检测模块", "rescan:")
         self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self._add_action("退出 4G Bridge", "quit:", "q")
@@ -182,6 +184,15 @@ class MenuBarController(AppKit.NSObject):
     def setRelayStatus_recent_(self, enabled: bool, recent: str | None) -> None:
         self._set("relay", "✓ 已开启" if enabled else "未开启")
         self._set("recent", recent or "—")
+
+    @objc.IBAction
+    def showAppNetwork_(self, _sender):
+        self._delegate.show_app_network()
+
+    @objc.IBAction
+    def showCarrier_(self, _sender):
+        self._delegate._settings_window._tabs.setSelectedTabViewItemIndex_(6)
+        self._delegate.show_settings()
 
     @objc.IBAction
     def statusClicked_(self, _sender):
