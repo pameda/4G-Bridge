@@ -170,6 +170,13 @@ class MenuBarController(AppKit.NSObject):
             and state not in (DataState.ENABLING, DataState.DISABLING)
         )
         button.setToolTip_("4G Bridge · " + (snapshot.warning or style.description))
+        if getattr(self._delegate, "diagnostic_mode", False):
+            self._set("device", "测试模式 · 未执行检测")
+            self._set("connection", "控制已暂停")
+            self._values["data"].setTitle_("恢复模块控制…")
+            self._values["data"].setEnabled_(True)
+            button.setToolTip_("4G Bridge · 短信测试模式，模块检测已暂停")
+            button.setAccessibilityLabel_("4G Bridge · 短信测试模式，模块检测已暂停")
 
     @objc.python_method
     def setRelayStatus_recent_(self, enabled: bool, recent: str | None) -> None:

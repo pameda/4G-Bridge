@@ -175,5 +175,19 @@ def run(output: Path) -> None:
     delegate.sample = None
     window.refresh(False)
     assert not window._history.samples
+    delegate.diagnostic_mode = True
+    window.refresh(False)
+    menu.update_(delegate.snapshot)
+    assert "测试模式" in window.window().title()
+    assert "检测已暂停" in window._device_status.stringValue()
+    assert window._details["usb"].stringValue() == "测试模式未检测"
+    assert window._rescan.title() == "恢复模块控制…"
+    assert menu._panel._data.isEnabled()
+    assert menu._values["data"].title() == "恢复模块控制…"
+    delegate.diagnostic_mode = False
+    window.refresh(False)
+    menu.update_(delegate.snapshot)
+    assert window.window().title() == "4G Bridge"
+    assert window._rescan.title() == "重新检测"
     print("UI_SMOKE_OK: menu, five pages, light/dark, states and safe interactions", flush=True)
     window.window().orderOut_(None)

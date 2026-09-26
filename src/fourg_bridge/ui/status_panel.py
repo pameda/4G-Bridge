@@ -76,6 +76,13 @@ class StatusPanelController(AppKit.NSViewController):
         )
         self._relay.setStringValue_("已开启" if self._delegate.relay_enabled() else "未开启")
         self._recent.setStringValue_(self._delegate.recent_relay() or "本次运行暂无转发")
+        if getattr(self._delegate, "diagnostic_mode", False):
+            self._title.setStringValue_("短信测试模式")
+            self._subtitle.setStringValue_("模块检测已暂停，并非 USB 未连接")
+            self._data.setTitle_("恢复模块控制…")
+            self._data.setEnabled_(True)
+            self._warning.setStringValue_("恢复后先关闭数据；短信转发保持关闭。")
+            self._relay.setStringValue_("测试模式中暂停")
 
     @objc.IBAction
     def toggleData_(self, _sender):

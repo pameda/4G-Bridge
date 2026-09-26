@@ -429,6 +429,8 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def refresh(self, include_target=True):
+        diagnostic = getattr(self._delegate, "diagnostic_mode", False)
+        self.window().setTitle_("4G Bridge · 短信测试模式" if diagnostic else "4G Bridge")
         settings, used, policy_status = self._delegate.data_policy()
         if include_target:
             self._auto_enabled.setState_(int(settings.auto_data_enabled))
@@ -487,6 +489,14 @@ class SettingsWindowController(AppKit.NSWindowController):
         busy = state in (DataState.ENABLING, DataState.DISABLING)
         self._data_button.setEnabled_(snapshot.descriptor is not None and not busy)
         self._rescan.setEnabled_(not busy)
+        self._rescan.setTitle_("恢复模块控制…" if diagnostic else "重新检测")
+        if diagnostic:
+            self._connection.setStringValue_("模块检测已暂停")
+            self._connection_detail.setStringValue_("当前为短信测试模式，不代表 USB 模块未连接。")
+            self._network_status.setStringValue_(
+                "点击“恢复模块控制”退出测试；不会自动转发积存短信。"
+            )
+            self._data_button.setEnabled_(False)
         signal = f"{snapshot.rssi_dbm} dBm" if snapshot.rssi_dbm is not None else "未取得"
         registration = {
             "registered_home": "已注册",
@@ -533,6 +543,13 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._device_warning.setStringValue_(
             snapshot.warning or "仅显示本机检测结果，不执行联网探测。"
         )
+        if diagnostic:
+            self._device_status.setStringValue_("短信测试模式 · 模块检测已暂停")
+            self._device_warning.setStringValue_(
+                "并非模块未插入，无需反复拔插。点击下方“重新检测模块”可恢复控制。"
+            )
+            for value in self._details.values():
+                value.setStringValue_("测试模式未检测")
         self._overview_relay.setStringValue_(
             "已开启" if self._delegate.relay_enabled() else "未开启"
         )

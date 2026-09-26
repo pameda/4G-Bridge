@@ -205,12 +205,18 @@ class ApplicationController:
         self._apply_appearance()
 
     def redetect(self) -> None:
+        if self.diagnostic_mode:
+            self.request_resume_modem_control()
+            return
         if self._data_busy:
             return
         self._auto_data.reset()
         self._start_data_change(False)
 
     def toggle_data(self) -> None:
+        if self.diagnostic_mode:
+            self.request_resume_modem_control()
+            return
         if self._data_busy:
             return
         if self._snapshot.data_state == DataState.ON:
@@ -233,7 +239,44 @@ class ApplicationController:
             return
         self._start_data_change(True)
 
+    def request_resume_modem_control(self) -> None:
+        if not self.diagnostic_mode:
+            return
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("退出短信测试模式，恢复模块控制？")
+        alert.setInformativeText_(
+            "测试模式没有检测 USB，并不表示模块未插入。恢复后先检测模块并关闭 4G 数据；"
+            "已授权的自动接管仍遵循原设置及流量限额。\n\n"
+            "默认关闭短信自动转发，避免处理积存短信；之后可在短信转发页手动开启。"
+        )
+        alert.addButtonWithTitle_("恢复模块控制")
+        alert.addButtonWithTitle_("取消")
+        if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+            self.resume_modem_control()
+
+    def resume_modem_control(self) -> None:
+        """Explicit exit from relay-only diagnostics; never restart the SMS queue."""
+        if not self.diagnostic_mode:
+            return
+        settings = replace(self._settings, relay_enabled=False)
+        # Persist before starting workers: a relaunch must not unexpectedly relay backlog.
+        try:
+            self._settings_store.save(settings)
+        except OSError:
+            self._show_alert("暂未恢复模块控制", "无法保存安全设置，请检查磁盘后重试。")
+            return
+        self._settings = settings
+        self.diagnostic_mode = False
+        self._snapshot = replace(self._snapshot, warning="正在检测 QDC507，请稍候。")
+        self._menu.setRelayStatus_recent_(False, self._recent_relay)
+        self._menu.update_(self._snapshot)
+        self._settings_window.refresh(False)
+        self._auto_data.start()
+        self.rescan()
+
     def _start_data_change(self, enabled: bool, *, automatic: bool = False) -> None:
+        if self.diagnostic_mode:
+            return
         if enabled and not self._auto_data.ready():
             return
         self._data_epoch += 1
@@ -307,7 +350,7 @@ class ApplicationController:
         self.show_settings()
 
     def relay_enabled(self) -> bool:
-        return self._settings.relay_enabled
+        return self._settings.relay_enabled and not self.diagnostic_mode
 
     def set_relay_enabled(self, enabled: bool) -> None:
         self._settings = replace(self._settings, relay_enabled=enabled)
