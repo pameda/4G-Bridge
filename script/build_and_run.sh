@@ -45,7 +45,7 @@ package_dmg() {
   mkdir -p "$ARTIFACTS"
   stage="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-dmg.XXXXXX)"
   mount_point="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-mount.XXXXXX)"
-  dmg="$ARTIFACTS/4G-Bridge-0.1.7-arm64.dmg"
+  dmg="$ARTIFACTS/4G-Bridge-0.1.8-arm64.dmg"
   sha_file="$dmg.sha256"
   trap '/bin/rm -rf "$stage" "$mount_point"' RETURN
   /bin/cp -R "$APP_BUNDLE" "$stage/"

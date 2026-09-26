@@ -31,6 +31,11 @@ class MessagesBridge:
             return target
         return self._runner.check(target)
 
+    def target_status(self) -> RelayResult:
+        """Non-interactive local prerequisite; no Messages call or queue mutation."""
+        target = self._target_result()
+        return target if isinstance(target, RelayResult) else RelayResult(True)
+
     def _target_result(self) -> str | RelayResult:
         try:
             target = self._get_target()

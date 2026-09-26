@@ -71,13 +71,15 @@ def test_ecm_telemetry_error_does_not_close_at_channel(failure):
     assert "短信转发" in snapshot.warning
 
 
-def test_controller_polls_sms_before_network_status_even_without_4g(monkeypatch):
+@pytest.mark.parametrize("target_ready", [True, False])
+def test_controller_polls_sms_before_network_status_even_without_4g(monkeypatch, target_ready):
     calls = []
     app = ApplicationController.__new__(ApplicationController)
     app._runtime_lock = threading.RLock()
     app._rescan_lock = threading.Lock()
     app._rescan_lock.acquire()
     app._settings = Settings(relay_enabled=True)  # Auto data disabled and no allowance.
+    app._bridge = SimpleNamespace(target_status=lambda: RelayResult(target_ready))
     app._discovery = SimpleNamespace(discover=lambda: object())
     app._runtime = SimpleNamespace(
         poll_sms=lambda: (calls.append("sms") or None),
@@ -94,5 +96,21 @@ def test_controller_polls_sms_before_network_status_even_without_4g(monkeypatch)
         SimpleNamespace(sharedWorkspace=lambda: SimpleNamespace(runningApplications=lambda: [])),
     )
     app._rescan_worker()
-    assert calls == ["sms", "status"]
+    assert calls == (["sms", "status"] if target_ready else ["status"])
     assert not app._rescan_lock.locked()
+
+
+@pytest.mark.parametrize(
+    "target,accepted", [(None, False), ("invalid", False), ("test@example.invalid", True)]
+)
+def test_target_prerequisite_does_not_call_messages(target, accepted):
+    bridge = MessagesBridge(object(), SimpleNamespace(get_target=lambda: target))
+    assert bridge.target_status().accepted is accepted
+
+
+def test_keychain_prerequisite_failure_does_not_call_messages():
+    def locked():
+        raise PermissionError("locked")
+
+    bridge = MessagesBridge(object(), SimpleNamespace(get_target=locked))
+    assert not bridge.target_status().accepted

@@ -81,7 +81,7 @@ class StatusPanelController(AppKit.NSViewController):
             self._subtitle.setStringValue_("模块检测已暂停，并非 USB 未连接")
             self._data.setTitle_("恢复模块控制…")
             self._data.setEnabled_(True)
-            self._warning.setStringValue_("恢复后先关闭数据；短信转发保持关闭。")
+            self._warning.setStringValue_("恢复后先关闭数据；短信转发遵循已保存设置。")
             self._relay.setStringValue_("测试模式中暂停")
 
     @objc.IBAction

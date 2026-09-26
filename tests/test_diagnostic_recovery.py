@@ -9,22 +9,22 @@ from fourg_bridge.models import DataState, ModemSnapshot
 from fourg_bridge.storage.settings import Settings
 
 
-def controller(calls, *, save_failure=False):
+def controller(calls, *, save_failure=False, relay_enabled=True):
     app = ApplicationController.__new__(ApplicationController)
     app.diagnostic_mode = True
-    app._settings = Settings(relay_enabled=True)
+    app._settings = Settings(relay_enabled=relay_enabled)
     app._snapshot = ModemSnapshot()
     app._recent_relay = None
 
     def save(settings):
         if save_failure:
             raise OSError("disk unavailable")
-        assert settings.relay_enabled is False
-        calls.append("save-relay-off")
+        assert settings.relay_enabled is relay_enabled
+        calls.append("save-preference")
 
     app._settings_store = SimpleNamespace(save=save)
     app._menu = SimpleNamespace(
-        setRelayStatus_recent_=lambda enabled, recent: calls.append("relay-off"),
+        setRelayStatus_recent_=lambda enabled, recent: calls.append(f"relay-{enabled}"),
         update_=lambda snapshot: calls.append("menu"),
     )
     app._settings_window = SimpleNamespace(refresh=lambda *a: calls.append("window"))
@@ -34,15 +34,23 @@ def controller(calls, *, save_failure=False):
     return app
 
 
-def test_resume_detects_modem_without_relaying_backlog_or_enabling_data():
+@pytest.mark.parametrize("enabled", [True, False])
+def test_resume_preserves_relay_preference_without_enabling_data(enabled):
     calls = []
-    app = controller(calls)
+    app = controller(calls, relay_enabled=enabled)
     assert not app.relay_enabled()
     app.resume_modem_control()
     assert not app.diagnostic_mode
-    assert not app.relay_enabled()
+    assert app.relay_enabled() is enabled
     assert app._snapshot.data_state == DataState.OFF
-    assert calls == ["save-relay-off", "relay-off", "menu", "window", "start-quota-guard", "scan"]
+    assert calls == [
+        "save-preference",
+        f"relay-{enabled}",
+        "menu",
+        "window",
+        "start-quota-guard",
+        "scan",
+    ]
     app.resume_modem_control()
     assert calls.count("start-quota-guard") == 1
 

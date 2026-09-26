@@ -494,7 +494,7 @@ class SettingsWindowController(AppKit.NSWindowController):
             self._connection.setStringValue_("模块检测已暂停")
             self._connection_detail.setStringValue_("当前为短信测试模式，不代表 USB 模块未连接。")
             self._network_status.setStringValue_(
-                "点击“恢复模块控制”退出测试；不会自动转发积存短信。"
+                "点击“恢复模块控制”退出测试；短信转发将遵循已保存的开关。"
             )
             self._data_button.setEnabled_(False)
         signal = f"{snapshot.rssi_dbm} dBm" if snapshot.rssi_dbm is not None else "未取得"

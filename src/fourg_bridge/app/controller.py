@@ -80,7 +80,7 @@ class ApplicationController:
         workspace_center.addObserver_selector_name_object_(
             self, "workspaceDidWake:", AppKit.NSWorkspaceDidWakeNotification, None
         )
-        self._menu.setRelayStatus_recent_(self._settings.relay_enabled, None)
+        self._menu.setRelayStatus_recent_(self.relay_enabled(), None)
         self.rescan()
 
     def timerFired_(self, _timer) -> None:
@@ -132,9 +132,13 @@ class ApplicationController:
                     # SMS relay has no data-state, default-interface, Wi-Fi,
                     # failover or quota gate. Messages uses the Mac's network.
                     if self._settings.relay_enabled:
-                        recent = self._runtime.poll_sms()
-                        if recent:
-                            AppHelper.callAfter(self._apply_recent_relay, recent)
+                        prerequisite = self._bridge.target_status()
+                        if prerequisite.accepted:
+                            recent = self._runtime.poll_sms()
+                            if recent:
+                                AppHelper.callAfter(self._apply_recent_relay, recent)
+                        else:
+                            AppHelper.callAfter(self._relay_waiting, prerequisite)
                     snapshot = self._runtime.snapshot()
                     AppHelper.callAfter(
                         self._apply_traffic,
@@ -184,6 +188,10 @@ class ApplicationController:
     def _apply_recent_relay(self, recent: str) -> None:
         self._recent_relay = recent
         self._menu.setRelayStatus_recent_(self._settings.relay_enabled, recent)
+
+    def _relay_waiting(self, result: RelayResult) -> None:
+        if not self._bridge_busy:
+            self._bridge_status = "自动转发等待配置：" + self._relay_error_message(result)
 
     def recent_relay(self) -> str | None:
         return self._recent_relay
@@ -247,7 +255,7 @@ class ApplicationController:
         alert.setInformativeText_(
             "测试模式没有检测 USB，并不表示模块未插入。恢复后先检测模块并关闭 4G 数据；"
             "已授权的自动接管仍遵循原设置及流量限额。\n\n"
-            "默认关闭短信自动转发，避免处理积存短信；之后可在短信转发页手动开启。"
+            "短信转发会恢复之前保存的开关；开启时可能处理模块中尚未转发的积存短信。"
         )
         alert.addButtonWithTitle_("恢复模块控制")
         alert.addButtonWithTitle_("取消")
@@ -255,11 +263,10 @@ class ApplicationController:
             self.resume_modem_control()
 
     def resume_modem_control(self) -> None:
-        """Explicit exit from relay-only diagnostics; never restart the SMS queue."""
+        """Exit isolated diagnostics and restore the user's saved relay preference."""
         if not self.diagnostic_mode:
             return
-        settings = replace(self._settings, relay_enabled=False)
-        # Persist before starting workers: a relaunch must not unexpectedly relay backlog.
+        settings = self._settings
         try:
             self._settings_store.save(settings)
         except OSError:
@@ -268,7 +275,7 @@ class ApplicationController:
         self._settings = settings
         self.diagnostic_mode = False
         self._snapshot = replace(self._snapshot, warning="正在检测 QDC507，请稍候。")
-        self._menu.setRelayStatus_recent_(False, self._recent_relay)
+        self._menu.setRelayStatus_recent_(self.relay_enabled(), self._recent_relay)
         self._menu.update_(self._snapshot)
         self._settings_window.refresh(False)
         self._auto_data.start()

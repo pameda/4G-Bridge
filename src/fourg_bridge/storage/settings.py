@@ -9,7 +9,7 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    relay_enabled: bool = False
+    relay_enabled: bool = True
     poll_interval_seconds: int = 20
     appearance: str = "system"
     auto_data_enabled: bool = False
@@ -26,7 +26,7 @@ class SettingsStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             appearance = payload.get("appearance", "system")
             return Settings(
-                relay_enabled=bool(payload.get("relay_enabled", False)),
+                relay_enabled=payload.get("relay_enabled", True) is True,
                 poll_interval_seconds=max(10, int(payload.get("poll_interval_seconds", 20))),
                 appearance=appearance if appearance in ("system", "light", "dark") else "system",
                 auto_data_enabled=payload.get("auto_data_enabled") is True,
@@ -35,8 +35,11 @@ class SettingsStore:
                     "month" if payload.get("data_budget_period") == "month" else "allowance"
                 ),
             )
-        except (FileNotFoundError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        except FileNotFoundError:
             return Settings()
+        except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+            # Corruption must not override a user's previously disabled relay.
+            return Settings(relay_enabled=False)
 
     def save(self, settings: Settings) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
