@@ -1,6 +1,6 @@
 # Windows 版开发计划
 
-状态：已列入下一阶段，尚未实现或发布 Windows 安装包。先完成 macOS 当前版本验收，再开始 Windows 移植；不将本文件视为功能已完成的证明。
+状态：用户于 2026-09-26 明确要求立即开发 Windows 版且不要 iMessage，已进入实现阶段。以下原顺序与候选方案保留为历史记录；现状及功能边界以 [WINDOWS.md](WINDOWS.md) 为准。使用 Python 共享核心和标准库 Tk/ttk + Win32 平台适配，未引入 WinUI 跨进程桥接。Windows QDC507 实机验收仍待执行。
 
 ## 开始条件
 

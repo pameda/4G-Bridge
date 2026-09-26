@@ -1,0 +1,78 @@
+name: Windows preview
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/fourg_bridge/windows/**', 'tests/windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Install reviewed build dependencies and produce EXE (requires owner approval)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+          architecture: x64
+      - name: Portable regression tests (standard library only)
+        run: |
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          python -m unittest discover -s tests/windows -v 2>&1 | Tee-Object artifacts/windows-tests.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Read-only native and UI smoke
+        run: |
+          python -m fourg_bridge.windows.main --self-test artifacts/windows-native.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m fourg_bridge.windows.main --ui-smoke artifacts/windows-ui.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install reviewed packaging tools
+        if: github.event_name == 'workflow_dispatch' && inputs.package
+        run: python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements-windows-build.lock
+      - name: Build EXE and installer
+        if: github.event_name == 'workflow_dispatch' && inputs.package
+        run: python script/build_windows.py
+      - name: Verify packaged app and install / uninstall
+        if: github.event_name == 'workflow_dispatch' && inputs.package
+        run: |
+          $app = Join-Path $PWD 'dist/windows/4G Bridge/4G Bridge.exe'
+          $result = Start-Process $app -ArgumentList '--self-test artifacts/windows-packaged-native.json' -Wait -PassThru
+          if ($result.ExitCode) { throw 'Packaged native check failed' }
+          $result = Start-Process $app -ArgumentList '--ui-smoke artifacts/windows-packaged-ui.json' -Wait -PassThru
+          if ($result.ExitCode) { throw 'Packaged UI check failed' }
+          $installer = (Get-ChildItem artifacts/*windows-x64-setup.exe).FullName
+          $result = Start-Process $installer -ArgumentList '/S' -Wait -PassThru
+          if ($result.ExitCode) { throw 'Install failed' }
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs/4GBridge/4G Bridge.exe'
+          if (!(Test-Path $installed)) { throw 'Installed executable missing' }
+          $result = Start-Process $installed -ArgumentList "--ui-smoke `"$PWD/artifacts/windows-installed-ui.json`"" -Wait -PassThru
+          if ($result.ExitCode) { throw 'Installed UI check failed' }
+          $uninstaller = Join-Path $env:LOCALAPPDATA 'Programs/4GBridge/Uninstall.exe'
+          Start-Process $uninstaller -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 4
+          if (Test-Path $installed) { throw 'Uninstall failed' }
+          'Install / launch / uninstall passed. QDC507 hardware tests NOT RUN.' | Set-Content artifacts/windows-install-test.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: 4G-Bridge-Windows-x64-preview
+          path: artifacts/windows-*
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: github.event_name == 'workflow_dispatch' && inputs.package
+        with:
+          name: 4G-Bridge-Windows-x64-installers
+          path: artifacts/*windows-x64*
+          retention-days: 14

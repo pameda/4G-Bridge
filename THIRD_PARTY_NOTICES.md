@@ -25,3 +25,10 @@
 - `EC25Toolbox`：AGPL-3.0，只研究外部行为，不复制源码。
 
 本项目不包含上述参考项目的 Logo、图标、名称、品牌素材或受保护源码。
+# Windows 构建补充（2026-09-26）
+
+Windows 运行代码只依赖官方 CPython / Tcl-Tk 标准发行运行时（PSF / Tcl-Tk 许可证）；与 macOS 的 PyObjC / libusb 依赖分离。
+
+打包工具拟使用 PyInstaller 6.22.3（GPL-2.0-or-later WITH Bootloader-exception，允许分发非 GPL 应用；[官方许可](https://github.com/pyinstaller/pyinstaller/blob/develop/COPYING.txt)）、官方项目维护的 hooks-contrib，以及其构建依赖 altgraph、pefile、pywin32-ctypes、packaging、setuptools。来源由官方 PyPI 元数据核验；Windows 专用 lock 文件固定 wheel 哈希。构建复制各 distribution 的 LICENSE/COPYING 与 CPython、Tcl-Tk 许可到安装包，不复制第三方产品源码或品牌素材。
+
+安装器采用 GitHub 官方 Windows runner 预装 NSIS，使用 zlib 压缩，不使用 LZMA。NSIS 主体与 zlib 模块为 zlib/libpng 许可；[官方完整许可](https://nsis.sourceforge.io/License)。未对第三方工具作源码修改。不在用户 Mac 安装这些 Windows 打包工具。

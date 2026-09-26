@@ -2,6 +2,8 @@
 
 ## 下一平台：Windows（macOS 当前验收完成后）
 
+最新要求已改为现在开发且不含 iMessage，参见 [WINDOWS.md](WINDOWS.md)。Windows 预览实现进行中；下方原先排期不再作为阻挡开发的条件。
+
 - [x] 记录移植范围、平台差异、安全边界和验收门槛，见 [WINDOWS_PLAN.md](WINDOWS_PLAN.md)。
 - [ ] 完成下方 macOS 0.1.9 剩余两项验收后开始移植。
 - [ ] 确认 Windows 测试主机及 QDC507 可连接条件，再实施平台适配、构建与实机测试。

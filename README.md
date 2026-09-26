@@ -4,7 +4,7 @@
 
 ## 当前能力
 
-当前发行版仅支持 macOS。Windows 版计划在 macOS 当前验收完成后开发，沿用本仓库，尚无可用 Windows 安装包；范围及 iMessage 平台限制见 [Windows 开发计划](WINDOWS_PLAN.md)。
+稳定使用目标仍为 macOS。按用户最新要求，已开始独立的 [Windows 预览版](WINDOWS.md)，不包含 iMessage；Windows 实机验收尚未完成，不将 macOS 结果作为 Windows 兼容性证明。
 
 - 识别 `2CA3:4006` 与 `2C7C:0125`，每次连接重新扫描 USB bulk endpoint。
 - 单一 AT 工作线程，串行 transaction，并将 `+CMTI` 等 URC 与普通响应分流。
