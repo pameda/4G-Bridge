@@ -10,8 +10,11 @@ from fourg_bridge.app.controller import ApplicationController
 
 class AppDelegate(AppKit.NSObject):
     def applicationDidFinishLaunching_(self, _notification) -> None:
-        self.controller = ApplicationController()
-        if "--settings" in sys.argv:
+        diagnostic = "--relay-diagnostics" in sys.argv
+        self.controller = ApplicationController(diagnostic_mode=diagnostic)
+        if diagnostic:
+            self.controller._settings_window._tabs.setSelectedTabViewItemIndex_(2)
+        if diagnostic or "--settings" in sys.argv:
             self.controller.show_settings()
 
     def applicationWillTerminate_(self, _notification) -> None:

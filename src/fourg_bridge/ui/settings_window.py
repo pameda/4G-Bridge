@@ -232,7 +232,11 @@ class SettingsWindowController(AppKit.NSWindowController):
                                             17,
                                             weight=AppKit.NSFontWeightSemibold,
                                         ),
-                                        label("QDC507 收到短信后，发送到你指定的会话。", 12, True),
+                                        label(
+                                            "通过 Mac 当前网络发送，Wi-Fi 下无需开启 4G 数据。",
+                                            12,
+                                            True,
+                                        ),
                                     ],
                                     spacing=5,
                                 ),
@@ -439,11 +443,16 @@ class SettingsWindowController(AppKit.NSWindowController):
             f"当前额度已用 {format_bytes(used)} / {format_bytes(settings.data_limit_bytes)}"
         )
         self._enabled.setState_(int(self._delegate.relay_enabled()))
+        self._enabled.setEnabled_(not getattr(self._delegate, "diagnostic_mode", False))
         if include_target:
             self._loaded_target = self._delegate.relay_target() or ""
             self._target.setStringValue_(self._loaded_target)
         busy, bridge_status = self._delegate.bridge_status()
         self._bridge_status.setStringValue_(bridge_status)
+        if getattr(self._delegate, "diagnostic_mode", False):
+            self._bridge_status.setStringValue_(
+                "测试模式：不读取模块短信、不自动转发、不控制 4G。\n" + bridge_status
+            )
         self._check_button.setEnabled_(not busy)
         self._test_button.setEnabled_(not busy)
         self._authorize_button.setEnabled_(not busy)

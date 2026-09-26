@@ -56,8 +56,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            artifacts/4G-Bridge-0.1.4-arm64.dmg \
-            artifacts/4G-Bridge-0.1.4-arm64.dmg.sha256 \
+            artifacts/4G-Bridge-0.1.5-arm64.dmg \
+            artifacts/4G-Bridge-0.1.5-arm64.dmg.sha256 \
             TESTING.md \
             CHANGELOG.md \
             --title "4G Bridge $GITHUB_REF_NAME" \

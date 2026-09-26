@@ -55,6 +55,19 @@ class ModemRuntime:
 
     def snapshot(self) -> ModemSnapshot:
         snapshot = self._controller.snapshot()
+        snapshot = replace(snapshot, data_state=self._data.state if self._data else DataState.OFF)
+        try:
+            return self._network_snapshot(snapshot)
+        except (OSError, subprocess.SubprocessError):
+            # ECM/DHCP is not a prerequisite for SMS over the AT channel.
+            # A Wi-Fi-only Mac can still relay using Messages' own network.
+            return replace(
+                snapshot,
+                data_state=self._data.state if self._data else DataState.OFF,
+                warning="网络状态暂不可读；短信转发不依赖 4G 数据开关。",
+            )
+
+    def _network_snapshot(self, snapshot: ModemSnapshot) -> ModemSnapshot:
         self.traffic_snapshot = None
         try:
             interface = self._ecm.discover()

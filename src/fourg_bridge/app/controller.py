@@ -37,7 +37,8 @@ from fourg_bridge.ui.settings_window import SettingsWindowController
 
 
 class ApplicationController:
-    def __init__(self) -> None:
+    def __init__(self, *, diagnostic_mode: bool = False) -> None:
+        self.diagnostic_mode = diagnostic_mode
         support = Path.home() / "Library" / "Application Support" / "4G Bridge"
         self._settings_store = SettingsStore(support / "settings.json")
         self._settings = self._settings_store.load()
@@ -66,7 +67,8 @@ class ApplicationController:
         except Exception:
             budget = None  # Missing/corrupt accounting must never authorize spending.
         self._auto_data = AutoDataMonitor(self, budget)
-        self._auto_data.start()
+        if not self.diagnostic_mode:
+            self._auto_data.start()
         timer_factory = (
             Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_
         )
@@ -95,6 +97,8 @@ class ApplicationController:
         self.rescan()
 
     def rescan(self) -> None:
+        if self.diagnostic_mode:
+            return  # Permission/testing UI must not read, relay or delete module SMS.
         if not self._rescan_lock.acquire(blocking=False):
             return
         threading.Thread(target=self._rescan_worker, name="QDC507-Discovery", daemon=True).start()
@@ -125,16 +129,18 @@ class ApplicationController:
                 else:
                     if self._runtime is None:
                         self._runtime = ModemRuntime(self._discovery, self._database, self._bridge)
+                    # SMS relay has no data-state, default-interface, Wi-Fi,
+                    # failover or quota gate. Messages uses the Mac's network.
+                    if self._settings.relay_enabled:
+                        recent = self._runtime.poll_sms()
+                        if recent:
+                            AppHelper.callAfter(self._apply_recent_relay, recent)
                     snapshot = self._runtime.snapshot()
                     AppHelper.callAfter(
                         self._apply_traffic,
                         self._runtime.traffic_snapshot,
                         self._runtime.traffic_usage,
                     )
-                    if self._settings.relay_enabled:
-                        recent = self._runtime.poll_sms()
-                        if recent:
-                            AppHelper.callAfter(self._apply_recent_relay, recent)
             AppHelper.callAfter(self._apply_snapshot, snapshot)
         except Exception as error:
             with self._runtime_lock:

@@ -112,6 +112,21 @@ def run(output: Path) -> None:
             AppKit.NSBitmapImageFileTypePNG, {}
         ).writeToFile_atomically_(str(output / f"{appearance}-panel.png"), True)
         menu._popover.performClose_(None)
+        button = menu._status_item.button()
+        button.setAppearance_(AppKit.NSAppearance.appearanceNamed_(appearance))
+        for state in DataState:
+            menu.update_(replace(delegate.snapshot, data_state=state))
+            assert menu._status_item.length() == 52
+            assert button.image().isTemplate()
+            assert button.title() == "4G"
+            assert button.image().size().width == 18
+            assert button.isEnabled()  # Dimmed icon remains clickable.
+            bitmap = button.bitmapImageRepForCachingDisplayInRect_(button.bounds())
+            button.cacheDisplayInRect_toBitmapImageRep_(button.bounds(), bitmap)
+            bitmap.representationUsingType_properties_(
+                AppKit.NSBitmapImageFileTypePNG, {}
+            ).writeToFile_atomically_(str(output / f"{appearance}-menubar-{state.value}.png"), True)
+        menu.update_(delegate.snapshot)
         for index in range(5):
             window._tabs.setSelectedTabViewItemIndex_(index)
             Foundation.NSRunLoop.currentRunLoop().runUntilDate_(

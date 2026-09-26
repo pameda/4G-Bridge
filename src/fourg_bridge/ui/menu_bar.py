@@ -3,8 +3,9 @@ from __future__ import annotations
 import AppKit
 import objc
 
-from fourg_bridge.models import DataState, DeviceState, ModemSnapshot
+from fourg_bridge.models import DataState, ModemSnapshot
 from fourg_bridge.support.presentation import format_bytes as _format_bytes
+from fourg_bridge.support.status_item import status_item_style
 from fourg_bridge.ui.status_panel import StatusPanelController
 
 
@@ -14,9 +15,8 @@ class MenuBarController(AppKit.NSObject):
         if self is None:
             return None
         self._delegate = delegate
-        self._status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(
-            AppKit.NSVariableStatusItemLength
-        )
+        self._status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(52.0)
+        self._symbol_cache = {}
         self._menu = AppKit.NSMenu.alloc().initWithTitle_("4G Bridge")
         self._panel = StatusPanelController.alloc().initWithDelegate_(delegate)
         self._popover = AppKit.NSPopover.alloc().init()
@@ -25,6 +25,10 @@ class MenuBarController(AppKit.NSObject):
         self._popover.setContentSize_(AppKit.NSMakeSize(380, 510))
         self._panel._popover = self._popover
         button = self._status_item.button()
+        button.setTitle_("4G")
+        button.setFont_(AppKit.NSFont.systemFontOfSize_weight_(12, AppKit.NSFontWeightMedium))
+        button.setImagePosition_(AppKit.NSImageLeading)
+        button.setImageScaling_(AppKit.NSImageScaleProportionallyDown)
         button.setTarget_(self)
         button.setAction_("statusClicked:")
         button.sendActionOn_(AppKit.NSEventMaskLeftMouseUp | AppKit.NSEventMaskRightMouseUp)
@@ -102,23 +106,31 @@ class MenuBarController(AppKit.NSObject):
     def update_(self, snapshot: ModemSnapshot) -> None:
         self._panel.refresh(snapshot)
         button = self._status_item.button()
-        if snapshot.device_state == DeviceState.MISSING:
-            symbol = "antenna.radiowaves.left.and.right.slash"
-            button.setTitle_("")
-        elif snapshot.data_state == DataState.ON:
-            symbol = "chart.bar.fill"
-            button.setTitle_(" 4G")
-        elif snapshot.data_state == DataState.PROTECTION_FAILED:
-            symbol = "exclamationmark.triangle.fill"
-            button.setTitle_("")
-        else:
-            symbol = "antenna.radiowaves.left.and.right"
-            button.setTitle_("")
-        image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
-            symbol, "4G Bridge 状态"
-        )
-        image.setTemplate_(True)
+        style = status_item_style(snapshot)
+        key = (style.symbol, style.level)
+        image = self._symbol_cache.get(key)
+        if image is None:
+            image = (
+                AppKit.NSImage.imageWithSystemSymbolName_variableValue_accessibilityDescription_(
+                    style.symbol, style.level, "4G Bridge"
+                )
+            )
+            if image is None:
+                image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                    "cellularbars", "4G Bridge"
+                )
+            configuration = AppKit.NSImageSymbolConfiguration.configurationWithPointSize_weight_(
+                14, AppKit.NSFontWeightRegular
+            )
+            image = image.imageWithSymbolConfiguration_(configuration)
+            image.setSize_(AppKit.NSMakeSize(18, 16))
+            image.setTemplate_(True)
+            self._symbol_cache[key] = image
         button.setImage_(image)
+        button.setContentTintColor_(
+            AppKit.NSColor.secondaryLabelColor() if style.secondary else None
+        )
+        button.setAccessibilityLabel_("4G Bridge · " + style.description)
         self._set("device", "已连接" if snapshot.descriptor else "未连接")
         descriptor = snapshot.descriptor
         self._set(
@@ -175,16 +187,7 @@ class MenuBarController(AppKit.NSObject):
             snapshot.descriptor is not None
             and state not in (DataState.ENABLING, DataState.DISABLING)
         )
-        button.setToolTip_(
-            "4G Bridge · "
-            + (
-                snapshot.warning
-                or {
-                    DataState.OFF: "4G 数据已关闭",
-                    DataState.ON: "4G 数据已开启",
-                }.get(state, "正在连接")
-            )
-        )
+        button.setToolTip_("4G Bridge · " + (snapshot.warning or style.description))
 
     @objc.python_method
     def setRelayStatus_recent_(self, enabled: bool, recent: str | None) -> None:
