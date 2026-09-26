@@ -4,9 +4,13 @@
 
 - 新增 41 项标准库回归测试；与原 macOS 套件合计 235 项通过，Ruff 和 strict mypy 通过。原 macOS 覆盖门槛保持：整体 92%、原核心 95%；这些百分比不包含 Windows 系统适配层，不宣称 Windows 整体覆盖率达到该值。
 - 首次 Windows CI 配置有 YAML 参数冒号转义问题，修复后 [Windows run 36228410419](https://github.com/pameda/4G-Bridge/actions/runs/36228410419) 通过：当时的 34 项 Windows 测试、Win32 结构尺寸、系统网卡枚举、2 个接口计数读取、960×730 六页 Tk/ttk 启动检查。
-- 源码 smoke 尚未携带打包图标，托盘验证记录为 false；不能把窗口启动当成托盘已验证。打包 EXE、托盘图标、安装／卸载另设验证步骤，等待第三方构建工具授权后执行。
+- 早期源码 smoke 未携带打包图标，托盘验证记录为 false；不能把窗口启动当成托盘已验证。后续正式打包检查结果见下方。
 - 后续新增探测接口绑定、查询确认过期／换卡取消、并发查询拒绝、睡眠撤销授权、开启失败回滚测试；不得用逻辑 mock 测试代替硬件验收。
 - 最终源码 `454f20b` 的 [Windows run 36228792202](https://github.com/pameda/4G-Bridge/actions/runs/36228792202) 再次通过：41 项 Windows 回归、只读系统接口检查和六页源码 UI 启动；第三方依赖安装、EXE 打包与安装验收步骤按未授权状态跳过。
+- 用户批准第三方打包工具后，修正 Python Windows 安装中缺失独立 Tcl/Tk 许可文件的问题：随包附上官方 9.0.4 标签许可，固定 Python 3.14.7，未跳过许可要求。
+- 发布构建 `833a28a7fbb794c55653f5e9fd730ac777c50bcd` 的 [Windows run 36231330207](https://github.com/pameda/4G-Bridge/actions/runs/36231330207) 全部成功：41 项 Windows 测试、哈希锁定依赖安装、EXE／NSIS 安装器构建、打包后的系统接口检查、六页 UI 与托盘启动、静默安装、安装后的 UI／托盘启动、卸载后主程序不存在检查。
+- 环境为 Windows Server 2022 x64；打包与安装后报告均为 `pages: 6`、`window: [960, 730]`、`tray: true`、`mutations: 0`。原生报告确认 DCB 28 字节、接口结构 1352 字节、两个系统接口计数可读取。这是启动检查，不是交互式视觉验收或完整功能实机测试。
+- 下载产物已核验 PE x86-64、许可文件和 SHA-256；安装器 `a09dd3d31ac61692bf3ced550b74c2db8c68cbb3b52044e666d1fe6330c721bc`，便携 ZIP `a7806ae3dd6b0544884f77938b4d112a768d971fc33c1116490283f7b0a00286`。本机最终 235 项测试、Ruff、mypy 和敏感信息扫描仍通过。
 - 没有安装新构建依赖到用户 Mac，没有发送查询短信，没有启停用户网络，没有运行 iMessage。Windows runner 无 QDC507，SIM／AT／上网／VPN／睡眠唤醒硬件测试均为 **未执行**。
 
 
