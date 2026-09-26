@@ -84,7 +84,7 @@ class ModemController:
     @staticmethod
     def _sim_state(lines: tuple[str, ...]) -> SIMState:
         joined = " ".join(lines).upper()
-        if "READY" in joined:
+        if any(re.fullmatch(r"\+CPIN:\s*READY", line.strip().upper()) for line in lines):
             return SIMState.READY
         if "SIM PIN" in joined:
             return SIMState.PIN_REQUIRED

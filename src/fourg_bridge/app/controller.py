@@ -25,11 +25,13 @@ from fourg_bridge.models import (
     RelayError,
     RelayResult,
     RelayStatus,
+    SIMState,
 )
 from fourg_bridge.modem.usb_discovery import USBDiscovery
 from fourg_bridge.network.app_traffic import AppTrafficTracker, read_counters
 from fourg_bridge.network.failover import Action
 from fourg_bridge.network.traffic import TrafficLedger
+from fourg_bridge.storage.auto_query import AutoQueryLedger, matches_profile, valid_profile
 from fourg_bridge.storage.budget import BudgetStore
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
@@ -72,6 +74,15 @@ class ApplicationController:
         self._carrier_status = "手动发送查询短信后等待运营商回复；不会自动定时查询。"
         self._carrier_busy = False
         self._carrier_resume = False
+        self._auto_query_seen = None
+        self._query_epoch = 0
+        self._query_suspended = False
+        self._auto_query_status = "重启、重插不重复发送；开启前需确认短信费用与运营商指令。"
+        try:
+            self._auto_query_ledger = AutoQueryLedger(support / "auto-query.sqlite")
+        except Exception:
+            self._auto_query_ledger = None
+            self._auto_query_status = "查询记录不可用，自动查询已安全暂停；可手动查询。"
         self._runtime_lock = threading.RLock()
         self._menu = MenuBarController.alloc().initWithDelegate_(self)
         self._settings_window = SettingsWindowController.alloc().initWithDelegate_(self)
@@ -294,6 +305,111 @@ class ApplicationController:
         alert.addButtonWithTitle_("取消")
         if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
             return
+        self._begin_carrier_query(number, command)
+
+    def auto_query_state(self):
+        enabled = self._settings.auto_query_enabled
+        profile = (
+            f"已授权 {self._settings.auto_query_operator} · "
+            f"{self._settings.auto_query_number} / {self._settings.auto_query_command}。"
+            if enabled
+            else "已关闭。"
+        )
+        return enabled, profile + "\n" + self._auto_query_status
+
+    def set_auto_query(self, enabled, number, command):
+        self._query_epoch += 1
+        if not enabled:
+            self._settings = replace(self._settings, auto_query_enabled=False)
+            self._save_query_settings(self._settings)
+            self._auto_query_status = "不再发起自动查询；已提交的短信无法撤回。"
+            self._settings_window.refresh(False)
+            return
+        snapshot = self._snapshot
+        operator = snapshot.operator or ""
+        if (
+            self.diagnostic_mode
+            or self._auto_query_ledger is None
+            or self._query_suspended
+            or not matches_profile(snapshot, operator)
+            or not valid_profile(operator, number, command)
+        ):
+            self._show_alert(
+                "暂不能授权自动查询", "请连接已就绪、非漫游的 SIM，并核实服务号和指令。"
+            )
+            self._settings_window.refresh(False)
+            return
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("允许换卡后自动查询套餐？")
+        alert.setInformativeText_(
+            f"仅在运营商为 {operator} 时，向 {number} 发送 {command}。\n"
+            "请确认该运营商及套餐适用此指令；可能产生短信费用。\n"
+            "首次开启也会为当前卡尝试一次。每张卡 24 小时最多一次，全部卡合计最多三次；"
+            "失败或结果不确定不重试，重插和重启不重复发送，不做定时查询。\n"
+            "运营商不匹配或漫游时需手动确认；新套餐未知前不自动开启 4G 数据。"
+        )
+        alert.addButtonWithTitle_("同意并开启")
+        alert.addButtonWithTitle_("取消")
+        if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+            settings = replace(
+                self._settings,
+                auto_query_enabled=True,
+                auto_query_operator=operator,
+                auto_query_number=number,
+                auto_query_command=command,
+            )
+            if not self._save_query_settings(settings):
+                self._settings_window.refresh(False)
+                return
+            self._settings = settings
+            self._auto_query_seen = None
+            self._auto_query_status = "等待验证当前 SIM；无需开启 4G 数据。"
+            self._maybe_auto_query(snapshot)
+        self._settings_window.refresh(False)
+
+    def _save_query_settings(self, settings):
+        try:
+            self._settings_store.save(settings)
+            return True
+        except OSError:
+            self._show_alert(
+                "无法保存自动查询设置",
+                "本次未授予新授权。若正在关闭功能，本次运行已停止自动查询；"
+                "请修复设置文件权限后再次关闭，否则重启可能恢复旧设置。",
+            )
+            return False
+
+    def _maybe_auto_query(self, snapshot):
+        settings = self._settings
+        if (
+            not settings.auto_query_enabled
+            or self.diagnostic_mode
+            or self._carrier_busy
+            or self._data_busy
+            or self._query_suspended
+            or self._runtime is None
+            or self._auto_query_ledger is None
+        ):
+            return
+        if not matches_profile(snapshot, settings.auto_query_operator):
+            self._auto_query_status = (
+                "等待已授权运营商的非漫游 SIM；其他运营商请手动查询并重新授权。"
+            )
+            return
+        key = self._auto_data.carrier_budget.key if self._auto_data.carrier_budget else None
+        if key is None or key == self._auto_query_seen:
+            return
+        self._auto_query_seen = key
+        self._begin_carrier_query(settings.auto_query_number, settings.auto_query_command, settings)
+
+    def _begin_carrier_query(self, number, command, automatic=None):
+        epoch = self._query_epoch
+        expected_sim = (
+            self._auto_data.carrier_budget.key if self._auto_data.carrier_budget else None
+        )
+        if expected_sim is None:
+            self._carrier_status = "SIM 身份尚未确认，未发送查询；请等待重新检测。"
+            return
         self._carrier_busy = True
         self._reply_logged = False
         self._event("query")
@@ -303,16 +419,47 @@ class ApplicationController:
         def worker():
             try:
                 with self._runtime_lock:
-                    status = (
-                        self._runtime.query_carrier(number, command)
-                        if self._runtime
-                        else "模块已断开，未发送。"
-                    )
+                    if not self._runtime:
+                        status = "模块已断开，未发送。"
+                    elif automatic and (
+                        self._settings != automatic
+                        or self.diagnostic_mode
+                        or epoch != self._query_epoch
+                        or self._query_suspended
+                    ):
+                        status = "自动查询授权已变化，未发送。"
+                    elif self._runtime.carrier_pending:
+                        status = "仍在等待查询回复，没有重复发送。"
+                    elif automatic and not self._auto_query_ledger.claim(expected_sim, time.time()):
+                        status = "本卡已尝试查询或达到自动查询频率限制；需要时请手动查询。"
+                    else:
+                        if not automatic and self._auto_query_ledger:
+                            # A manually authorized attempt also suppresses the automatic one.
+                            with suppress(Exception):
+                                self._auto_query_ledger.claim(expected_sim, time.time())
+                        status = self._runtime.query_carrier(
+                            number,
+                            command,
+                            expected_sim=expected_sim,
+                            operator=automatic.auto_query_operator if automatic else None,
+                            authorized=(
+                                lambda: self._settings == automatic
+                                and epoch == self._query_epoch
+                                and not self._query_suspended
+                            )
+                            if automatic
+                            else None,
+                        )
             except Exception:
-                status = "查询未完成；发送结果不确定，请先等待回复，不要立即重试。"
+                status = "查询未完成或记录不可用；不自动重试，请先等待回复。"
+            if automatic:
+                AppHelper.callAfter(self._auto_query_finished, status)
             AppHelper.callAfter(self._carrier_finished, status)
 
         threading.Thread(target=worker, name="Carrier-Query", daemon=True).start()
+
+    def _auto_query_finished(self, status):
+        self._auto_query_status = status
 
     def _carrier_finished(self, status):
         self._event("query_end")
@@ -323,11 +470,15 @@ class ApplicationController:
 
     def workspaceDidSleep_(self, _notification) -> None:
         self._event("sleep")
+        self._query_epoch += 1
+        self._query_suspended = True
         self._auto_data.suspended = True
         self._force_data_off("sleep")
 
     def workspaceDidWake_(self, _notification) -> None:
         self._event("wake")
+        self._query_epoch += 1
+        self._query_suspended = False
         self._force_data_off("wake")
         self._auto_data.reset()
         self._auto_data.suspended = False
@@ -413,7 +564,7 @@ class ApplicationController:
             try:
                 changed = monitor.carrier_budget.bind(
                     snapshot.iccid
-                    if snapshot.descriptor and snapshot.sim_state.value == "READY"
+                    if snapshot.descriptor and snapshot.sim_state == SIMState.READY
                     else None
                 )
                 if changed and self._runtime:
@@ -445,6 +596,7 @@ class ApplicationController:
             self._reply_logged = True
         self._snapshot = snapshot
         if changed:
+            self._auto_query_seen = None
             self._start_data_change(False)
             return
         if snapshot.descriptor is None:
@@ -452,6 +604,7 @@ class ApplicationController:
         if previously_connected and snapshot.descriptor is None:
             self._force_data_off("USB disconnect")
         self._menu.update_(snapshot)
+        self._maybe_auto_query(snapshot)
         if self._settings_window.window().isVisible():
             self._settings_window.refresh(False)
 
@@ -858,10 +1011,14 @@ class ApplicationController:
         alert.runModal()
 
     def quit(self) -> None:
+        self._query_epoch += 1
+        self._query_suspended = True
         self._force_data_off("quit")
         AppKit.NSApp.terminate_(None)
 
     def close(self) -> None:
+        self._query_epoch += 1
+        self._query_suspended = True
         self._auto_data.stop.set()
         self._force_data_off("terminate")
         with self._runtime_lock:

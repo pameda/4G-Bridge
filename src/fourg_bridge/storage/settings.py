@@ -6,6 +6,8 @@ import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from fourg_bridge.storage.auto_query import valid_profile
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
@@ -16,6 +18,10 @@ class Settings:
     data_limit_bytes: int = 0
     data_budget_period: str = "allowance"
     carrier_policy_enabled: bool = False
+    auto_query_enabled: bool = False
+    auto_query_operator: str = ""
+    auto_query_number: str = "10001"
+    auto_query_command: str = "108"
 
 
 def mac_carrier_policy(settings: Settings) -> Settings:
@@ -37,12 +43,20 @@ class SettingsStore:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             appearance = payload.get("appearance", "system")
+            operator = payload.get("auto_query_operator", "")
+            number = payload.get("auto_query_number", "10001")
+            command = payload.get("auto_query_command", "108")
+            profile_ok = valid_profile(operator, number, command)
             return Settings(
                 relay_enabled=payload.get("relay_enabled", True) is True,
                 poll_interval_seconds=max(10, int(payload.get("poll_interval_seconds", 20))),
                 appearance=appearance if appearance in ("system", "light", "dark") else "system",
                 auto_data_enabled=payload.get("auto_data_enabled") is True,
                 carrier_policy_enabled=payload.get("carrier_policy_enabled") is True,
+                auto_query_enabled=payload.get("auto_query_enabled") is True and profile_ok,
+                auto_query_operator=operator if profile_ok else "",
+                auto_query_number=number if profile_ok else "10001",
+                auto_query_command=command if profile_ok else "108",
                 data_limit_bytes=max(0, int(payload.get("data_limit_bytes", 0))),
                 data_budget_period=(
                     "month" if payload.get("data_budget_period") == "month" else "allowance"

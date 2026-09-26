@@ -497,7 +497,11 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._carrier_number = AppKit.NSPopUpButton.alloc().init()
         self._carrier_number.addItemsWithTitles_(["10001", "10086", "10010"])
         self._carrier_number.setAccessibilityLabel_("运营商短信服务号")
-        self._carrier_command = AppKit.NSTextField.textFieldWithString_("108")
+        preferences, _, _ = self._delegate.data_policy()
+        self._carrier_number.selectItemWithTitle_(preferences.auto_query_number)
+        self._carrier_command = AppKit.NSTextField.textFieldWithString_(
+            preferences.auto_query_command
+        )
         self._carrier_command.widthAnchor().constraintEqualToConstant_(100).setActive_(True)
         self._carrier_command.setAccessibilityLabel_("运营商查询指令")
         self._carrier_button = self._button("查询一次…", "queryCarrier:")
@@ -506,6 +510,11 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._carrier_updated = label("等待运营商短信回复", 12, True)
         self._carrier_policy = label("尚未启用套餐保护", 12, True)
         self._carrier_ring = UsageRing.alloc().init()
+        self._query_auto = AppKit.NSSwitch.alloc().init()
+        self._query_auto.setAccessibilityLabel_("换卡后自动查询套餐")
+        self._query_auto.setTarget_(self)
+        self._query_auto.setAction_("autoQueryChanged:")
+        self._query_auto_note = label("默认关闭", 11, True)
         return page(
             "运营商流量",
             "套餐余量与本机计数，分开查看。",
@@ -544,9 +553,11 @@ class SettingsWindowController(AppKit.NSWindowController):
                             True,
                         ),
                         self._carrier_note,
+                        stack([label("换卡后自动查询套餐", 13), self._query_auto], True),
+                        self._query_auto_note,
                         label(
                             "预填电信 10001 / 108。地区、运营商及套餐可能不同，发送前请核实。\n"
-                            "查询短信可能收费，发送前再次确认；自动定时查询关闭。\n"
+                            "查询短信可能收费；自动查询仅按已授权号码和指令，不做定时查询。\n"
                             "收到的原文仍按你的 iMessage 开关转发；未转发成功不删除。",
                             11,
                             True,
@@ -702,6 +713,9 @@ class SettingsWindowController(AppKit.NSWindowController):
         carrier_busy, carrier_status, allowance = self._delegate.carrier_state()
         self._carrier_button.setEnabled_(not carrier_busy)
         self._carrier_note.setStringValue_(carrier_status)
+        query_enabled, query_note = self._delegate.auto_query_state()
+        self._query_auto.setState_(int(query_enabled))
+        self._query_auto_note.setStringValue_(query_note)
         self._carrier_remaining.setStringValue_(
             f"{allowance.amount} {allowance.unit}" if allowance else "—"
         )
@@ -861,6 +875,13 @@ class SettingsWindowController(AppKit.NSWindowController):
     def queryCarrier_(self, _sender):
         self._delegate.query_carrier(
             self._carrier_number.titleOfSelectedItem(), self._carrier_command.stringValue().strip()
+        )
+
+    def autoQueryChanged_(self, _sender):
+        self._delegate.set_auto_query(
+            bool(self._query_auto.state()),
+            self._carrier_number.titleOfSelectedItem(),
+            self._carrier_command.stringValue().strip(),
         )
 
     @objc.IBAction

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from fourg_bridge.cellular.carrier_query import parse_allowance, parse_usage, send_query
 from fourg_bridge.cellular.data_control import ModemAttachControl, NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
-from fourg_bridge.models import DataState, ModemSnapshot, RelayStatus
+from fourg_bridge.models import DataState, ModemSnapshot, RelayStatus, SIMState
 from fourg_bridge.modem.controller import ModemController
 from fourg_bridge.modem.usb_discovery import USBDiscovery
 from fourg_bridge.modem.usb_session import USBModemSession, USBSessionFactory
@@ -20,6 +20,7 @@ from fourg_bridge.sms.assembler import SMSAssembler
 from fourg_bridge.sms.pdu_decoder import PDUDecodeError, decode_pdu
 from fourg_bridge.sms.receiver import SMSReceiver
 from fourg_bridge.sms.relay import SMSRelay
+from fourg_bridge.storage.auto_query import matches_profile
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.identity import IdentityStore
 from fourg_bridge.support.privacy import redact_identifier
@@ -47,6 +48,7 @@ class ModemRuntime:
         self._carrier_deadline = 0.0
         self._carrier_requested_at = None
         self._carrier_number = None
+        self._carrier_query_sim = None
         self._session: USBModemSession = USBSessionFactory(discovery).connect(descriptor)
         self._controller = ModemController(discovery, self._session.transport)
         self._receiver = SMSReceiver(
@@ -113,7 +115,27 @@ class ModemRuntime:
     def carrier_pending(self):
         return time.monotonic() < self._carrier_deadline
 
-    def query_carrier(self, number, command):
+    def query_carrier(self, number, command, *, expected_sim=None, operator=None, authorized=None):
+        if self.carrier_pending:
+            return "仍在等待上次回复，最多等待 10 分钟；没有重复发送。"
+        # Serialize validation and submission with every other AT transaction.
+        with self._session.transport.transaction():
+            if expected_sim:
+                snapshot = self._controller.snapshot()
+                key = IdentityStore(self._database.path.parent).sim(snapshot.iccid)
+                if key != expected_sim or (operator and not matches_profile(snapshot, operator)):
+                    return "SIM 或运营商已变化，未发送查询；请重新确认。"
+                if snapshot.sim_state != SIMState.READY:
+                    return "SIM 尚未就绪，未发送查询。"
+                self._receiver.read_identity()
+                if self._receiver.sim_key != expected_sim:
+                    return "SIM 已变化或无法核实，未发送查询。"
+            if authorized is not None and not authorized():
+                return "自动查询授权已关闭或修改，未发送。"
+            self._carrier_query_sim = expected_sim
+            return self._submit_carrier_query(number, command)
+
+    def _submit_carrier_query(self, number, command):
         if self.carrier_pending:
             return "仍在等待上次回复，最多等待 10 分钟；没有重复发送。"
         self._carrier_requested_at = datetime.now().astimezone().replace(microsecond=0)
@@ -136,6 +158,12 @@ class ModemRuntime:
             self.carrier_usage = None
             self.carrier_allowance = None
             self.carrier_sim_key = None
+            self._carrier_cache_at = None
+            self.carrier_reply_received = False
+            if getattr(self, "_carrier_query_sim", None) != identity[1]:
+                self._carrier_requested_at = None
+                self._carrier_number = None
+                self._carrier_deadline = 0.0
             self._sms_identity = identity
         for raw in parts:
             try:

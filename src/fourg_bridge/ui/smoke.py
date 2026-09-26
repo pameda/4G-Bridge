@@ -60,6 +60,13 @@ class PreviewDelegate:
     def carrier_state(self):
         return False, "尚未发送查询", None
 
+    def auto_query_state(self):
+        return getattr(self, "query_enabled", False), "模拟授权状态；不发送短信。"
+
+    def set_auto_query(self, enabled, number, command):
+        self.query_enabled = enabled
+        self.query_profile = (number, command)
+
     def carrier_usage(self):
         fraction = getattr(self, "preview_fraction", 0.2)
         return (
@@ -300,6 +307,16 @@ def run(output: Path) -> None:
     assert window._app_table.table.numberOfRows() == 1
     assert window._login.state() == 0
     assert window._carrier_command.stringValue() == "108"
+    assert window._query_auto.state() == 0
+    window._query_auto.setState_(1)
+    window.autoQueryChanged_(None)
+    window.refresh(False)
+    assert window._query_auto.state() == 1
+    assert delegate.query_profile == ("10001", "108")
+    window._query_auto.setState_(0)
+    window.autoQueryChanged_(None)
+    window.refresh(False)
+    assert window._query_auto.state() == 0
     assert not window._log_text.isEditable()
     assert menu._panel._ring.value.stringValue() == "20.0%"
     menu._panel._ring.update(None)
