@@ -1,5 +1,5 @@
 from fourg_bridge.models import ATResponse
-from fourg_bridge.sms.receiver import SMSReceiver
+from fourg_bridge.sms.receiver import CleanupResult, SMSReceiver
 
 
 class Transport:
@@ -27,6 +27,5 @@ def test_poll_all_stores_and_parse() -> None:
 def test_delete_stops_on_failure() -> None:
     transport = Transport()
     receiver = SMSReceiver(transport)
-    assert receiver.delete((("ME", 1), ("SM", 2)))
-    transport.fail_delete = True
-    assert not receiver.delete((("ME", 1),))
+    assert receiver.delete_verified(()) == CleanupResult.BLOCKED
+    assert transport.commands == []

@@ -229,7 +229,9 @@ class ApplicationController:
         if not usage or not self._auto_data.carrier_budget:
             self._show_alert("需要套餐数据", "请先查询运营商，并确认总量和已用量已被识别。")
             return
-        self._auto_data.carrier_budget.update_plan(usage)
+        self._auto_data.carrier_budget.update_plan(
+            usage, sim_key=self._auto_data.carrier_budget.key
+        )
         alert = AppKit.NSAlert.alloc().init()
         alert.setMessageText_("允许按套餐上限自动接管？")
         alert.setInformativeText_(
@@ -367,7 +369,7 @@ class ApplicationController:
                     # SMS relay has no data-state, default-interface, Wi-Fi,
                     # failover or quota gate. Messages uses the Mac's network.
                     relay_ready = False
-                    if self._settings.relay_enabled:
+                    if self._settings.relay_enabled and not self._database.blocked:
                         prerequisite = self._bridge.target_status()
                         if prerequisite.accepted:
                             relay_ready = True
@@ -404,10 +406,25 @@ class ApplicationController:
             self._rescan_lock.release()
 
     def _apply_snapshot(self, snapshot: ModemSnapshot) -> None:
+        changed = False
         usage = getattr(self._runtime, "carrier_usage", None)
+        monitor = getattr(self, "_auto_data", None)
+        if monitor and monitor.carrier_budget:
+            try:
+                changed = monitor.carrier_budget.bind(
+                    snapshot.iccid
+                    if snapshot.descriptor and snapshot.sim_state.value == "READY"
+                    else None
+                )
+                if changed and self._runtime:
+                    self._runtime.cancel_pending_enable()
+            except Exception:
+                monitor.error = True
         if usage and getattr(self, "_auto_data", None) and self._auto_data.carrier_budget:
             try:
-                self._auto_data.carrier_budget.update_plan(usage)
+                self._auto_data.carrier_budget.update_plan(
+                    usage, sim_key=getattr(self._runtime, "carrier_sim_key", None)
+                )
             except Exception:
                 self._auto_data.error = True
         if self._data_busy:
@@ -427,6 +444,9 @@ class ApplicationController:
             self._event("reply")
             self._reply_logged = True
         self._snapshot = snapshot
+        if changed:
+            self._start_data_change(False)
+            return
         if snapshot.descriptor is None:
             self._apply_traffic(None, self._traffic_usage)
         if previously_connected and snapshot.descriptor is None:
@@ -715,16 +735,23 @@ class ApplicationController:
         return False
 
     def relay_queue_summary(self) -> str:
+        if self._database.blocked:
+            return self._database.blocked
         unknown = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)
         retry = self._database.records_with_status(RelayStatus.RETRY)
         cleanup = self._database.records_with_status(RelayStatus.CLEANUP_PENDING)
         failed = self._database.records_with_status(RelayStatus.FAILED)
-        if not (unknown or retry or cleanup or failed):
+        blocked = self._database.records_with_status(RelayStatus.CLEANUP_BLOCKED)
+        if not (unknown or retry or cleanup or failed or blocked):
             return "没有待处理失败；历史成功只表示 Messages 接受请求，不代表对方已收到。"
         lines = [
             f"等待重试 {len(retry)} · 投递不确定 {len(unknown)} · "
             f"清理 {len(cleanup)} · 失败 {len(failed)}"
         ]
+        if blocked:
+            lines.append(
+                f"安全暂停清理 {len(blocked)} 项：身份或短信内容无法核验；不会重发或删除。"
+            )
         if failed or retry:
             record = (failed or retry)[-1]
             try:

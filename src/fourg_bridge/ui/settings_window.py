@@ -11,6 +11,7 @@ from fourg_bridge.support.presentation import (
     format_bytes,
     operator_name,
     route_description,
+    usage_style,
 )
 from fourg_bridge.ui.app_network import AppNetworkTable
 from fourg_bridge.ui.components import (
@@ -25,7 +26,7 @@ from fourg_bridge.ui.components import (
     symbol,
 )
 from fourg_bridge.ui.navigation import NavigationTabs, Sidebar
-from fourg_bridge.ui.usage_ring import UsageRing
+from fourg_bridge.ui.usage_ring import UsageRing, usage_color
 
 
 class SettingsWindowController(AppKit.NSWindowController):
@@ -570,6 +571,25 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._budget_usage = label(
             "4G 上限：等待运营商套餐总量", 15, weight=AppKit.NSFontWeightMedium
         )
+        self._usage_percent = label("—", 42, weight=AppKit.NSFontWeightSemibold, numeric=True)
+        self._usage_stage = label("等待套餐数据", 15, weight=AppKit.NSFontWeightMedium)
+        self._stage_markers = [label("", 11, True) for _ in range(3)]
+        self._stage_cards = [
+            group(
+                [
+                    label(title, 15, weight=AppKit.NSFontWeightSemibold),
+                    label(detail, 12, True),
+                    marker,
+                ],
+                compact=True,
+            )
+            for title, detail, marker in zip(
+                ("低于 80%", "达到 80%", "达到 98%"),
+                ("正常使用区间", "提醒并确认", "自动停用阈值"),
+                self._stage_markers,
+                strict=True,
+            )
+        ]
         self._appearance = (
             AppKit.NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
                 ["跟随系统", "浅色", "深色"],
@@ -592,33 +612,19 @@ class SettingsWindowController(AppKit.NSWindowController):
                             ],
                             True,
                         ),
+                        stack(
+                            [
+                                self._usage_percent,
+                                stack(
+                                    [label("套餐估算已用", 12, True), self._usage_stage], spacing=4
+                                ),
+                            ],
+                            True,
+                            18,
+                        ),
                         self._budget_usage,
                         self._policy_status,
-                        columns(
-                            [
-                                group(
-                                    [
-                                        label("低于 80%", 15, weight=AppKit.NSFontWeightSemibold),
-                                        label("正常使用", 12, True),
-                                    ],
-                                    compact=True,
-                                ),
-                                group(
-                                    [
-                                        label("达到 80%", 15, weight=AppKit.NSFontWeightSemibold),
-                                        label("提醒并确认", 12, True),
-                                    ],
-                                    compact=True,
-                                ),
-                                group(
-                                    [
-                                        label("达到 98%", 15, weight=AppKit.NSFontWeightSemibold),
-                                        label("自动关闭", 12, True),
-                                    ],
-                                    compact=True,
-                                ),
-                            ]
-                        ),
+                        columns(self._stage_cards),
                         label(
                             "上限自动取自运营商套餐，不需要另填 GB 额度。Wi-Fi 可用时优先使用。\n"
                             "未知套餐或查询超过 6 小时时暂停开启，请手动重新查询。\n"
@@ -657,6 +663,25 @@ class SettingsWindowController(AppKit.NSWindowController):
         carrier_usage = self._delegate.carrier_usage()
         self._overview_ring.update(carrier_usage)
         self._carrier_ring.update(carrier_usage)
+        usage = usage_style(carrier_usage.fraction if carrier_usage else None)
+        color = usage_color(usage.color)
+        self._usage_percent.setStringValue_(usage.percent)
+        self._usage_percent.setTextColor_(color)
+        self._usage_stage.setStringValue_(usage.title)
+        self._usage_stage.setTextColor_(color)
+        for index, (card, marker) in enumerate(
+            zip(self._stage_cards, self._stage_markers, strict=True)
+        ):
+            selected = index == usage.stage
+            marker.setStringValue_("● 当前区间" if selected else " ")
+            marker.setTextColor_(color if selected else AppKit.NSColor.secondaryLabelColor())
+            card.setBorderWidth_(1.5 if selected else 0.5)
+            card.setBorderColor_(color if selected else AppKit.NSColor.separatorColor())
+            card.setFillColor_(
+                color.colorWithAlphaComponent_(0.08)
+                if selected
+                else AppKit.NSColor.controlBackgroundColor()
+            )
         self._overview_plan.setStringValue_(
             f"已用 {format_bytes(carrier_usage.used_bytes)} / "
             f"{format_bytes(carrier_usage.total_bytes)}"

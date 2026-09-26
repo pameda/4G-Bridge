@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from fourg_bridge.models import AssembledSMS, RelayResult, RelayStatus
+from fourg_bridge.models import AssembledSMS, CleanupProof, RelayResult, RelayStatus
+from fourg_bridge.sms.receiver import CleanupResult
 from fourg_bridge.storage.database import RelayDatabase, RelayRecord
 from fourg_bridge.support.privacy import stable_message_hash
 
@@ -15,7 +16,8 @@ class BridgeProtocol(Protocol):
 
 
 class CleanerProtocol(Protocol):
-    def delete(self, locations: tuple[tuple[str, int], ...]) -> bool: ...
+    def proofs(self, message: AssembledSMS) -> tuple[CleanupProof, ...]: ...
+    def delete_verified(self, proofs: tuple[CleanupProof, ...]) -> CleanupResult: ...
 
 
 class SMSRelay:
@@ -35,10 +37,12 @@ class SMSRelay:
             message.sender,
             message.timestamp.isoformat(),
             message.locations,
+            self._cleaner.proofs(message),
         )
         if record.status in (
             RelayStatus.SENT,
             RelayStatus.CLEANUP_PENDING,
+            RelayStatus.CLEANUP_BLOCKED,
             RelayStatus.DELIVERY_UNKNOWN,
             RelayStatus.FAILED,
         ):
@@ -51,8 +55,7 @@ class SMSRelay:
 
     def retry_cleanup(self) -> None:
         for record in self._database.cleanup_pending():
-            if self._delete(record.locations):
-                self._database.transition(record.message_hash, RelayStatus.SENT)
+            self._cleanup(record)
 
     def recover_interrupted(self) -> None:
         # SENDING means Messages may have accepted the send before a crash.
@@ -60,11 +63,25 @@ class SMSRelay:
         for record in self._database.records_with_status(RelayStatus.SENDING):
             self._database.transition(record.message_hash, RelayStatus.DELIVERY_UNKNOWN)
 
-    def _delete(self, locations: tuple[tuple[str, int], ...]) -> bool:
+    def _cleanup(self, record: RelayRecord) -> None:
         try:
-            return self._cleaner.delete(locations)
+            result = (
+                self._cleaner.delete_verified(record.cleanup)
+                if record.cleanup
+                else CleanupResult.BLOCKED
+            )
         except Exception:
-            return False
+            result = CleanupResult.PENDING
+        status = {
+            CleanupResult.DELETED: RelayStatus.SENT,
+            CleanupResult.PENDING: RelayStatus.CLEANUP_PENDING,
+            CleanupResult.BLOCKED: RelayStatus.CLEANUP_BLOCKED,
+        }[result]
+        self._database.transition(
+            record.message_hash,
+            status,
+            last_error=None if result == CleanupResult.DELETED else "cleanup_verification_required",
+        )
 
     def _attempt(self, record: RelayRecord, message: AssembledSMS) -> RelayRecord:
         self._database.transition(record.message_hash, RelayStatus.SENDING)
@@ -72,14 +89,7 @@ class SMSRelay:
         if result.accepted:
             # Persist acceptance before module cleanup, which can fail or raise independently.
             self._database.transition(record.message_hash, RelayStatus.CLEANUP_PENDING)
-            if self._delete(message.locations):
-                self._database.transition(record.message_hash, RelayStatus.SENT)
-            else:
-                self._database.transition(
-                    record.message_hash,
-                    RelayStatus.CLEANUP_PENDING,
-                    last_error="module_delete_failed",
-                )
+            self._cleanup(record)
             updated = self._database.get(record.message_hash)
             assert updated is not None
             return updated

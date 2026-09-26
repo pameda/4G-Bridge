@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes as c
 import json
+import multiprocessing
 import sys
 import tempfile
 import time
@@ -15,6 +16,7 @@ from fourg_bridge.windows.native import DCB, IfRow, dll
 
 
 def main() -> None:
+    multiprocessing.freeze_support()
     parser = argparse.ArgumentParser()
     parser.add_argument("--background", action="store_true")
     parser.add_argument("--wait-instance", action="store_true")
@@ -55,7 +57,9 @@ def _run(args: argparse.Namespace) -> None:
     from fourg_bridge.windows.ui import Window
 
     if args.self_test:
+        from fourg_bridge.windows.notifications import NetworkNotifications
         from fourg_bridge.windows.platform import inventory
+        from fourg_bridge.windows.probe import probe_self_test
 
         snapshot = inventory()  # Read-only; no SMS / network operations.
         from fourg_bridge.windows.native import interface_counters
@@ -67,6 +71,10 @@ def _run(args: argparse.Namespace) -> None:
                 checked += 1
             except Exception:
                 continue
+        bounded_probe = probe_self_test()
+        notifications = NetworkNotifications(lambda: None)
+        notification_support = notifications.start()
+        notifications.close()
         args.self_test.write_text(
             json.dumps(
                 {
@@ -78,11 +86,13 @@ def _run(args: argparse.Namespace) -> None:
                     "counter_interfaces": checked,
                     "hardware_test": "not_run",
                     "mutations": 0,
+                    "bounded_probe": bounded_probe,
+                    "network_notifications": notification_support,
                 }
             ),
             encoding="utf-8",
         )
-        if c.sizeof(DCB) != 28 or c.sizeof(IfRow) != 1352 or not checked:
+        if c.sizeof(DCB) != 28 or c.sizeof(IfRow) != 1352 or not checked or not bounded_probe:
             raise SystemExit(1)
         return
     root = tk.Tk()

@@ -32,4 +32,6 @@ def test_corrupt_database_is_quarantined(tmp_path) -> None:
     path.write_bytes(b"not a database")
     database = RelayDatabase(path)
     assert database.get("missing") is None
-    assert list(tmp_path.glob("relay.corrupt-*.sqlite"))
+    assert database.blocked
+    assert path.read_bytes() == b"not a database"
+    assert list(tmp_path.glob("backups/relay-*/relay.sqlite"))

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
-from fourg_bridge.models import AssembledSMS, RelayError, RelayResult, RelayStatus
+from fourg_bridge.models import AssembledSMS, CleanupProof, RelayError, RelayResult, RelayStatus
+from fourg_bridge.sms.receiver import CleanupResult
 from fourg_bridge.sms.relay import SMSRelay
 from fourg_bridge.storage.database import RelayDatabase
 
@@ -20,9 +21,12 @@ class FakeCleaner:
         self.succeeds = succeeds
         self.calls = 0
 
-    def delete(self, locations):
+    def proofs(self, message):
+        return (CleanupProof("ME", 1, "a" * 64, "b" * 64),)
+
+    def delete_verified(self, proofs):
         self.calls += 1
-        return self.succeeds
+        return CleanupResult.DELETED if self.succeeds else CleanupResult.PENDING
 
 
 def _message(body: str = "private body") -> AssembledSMS:
@@ -117,8 +121,8 @@ def test_timeout_retains_sms_and_never_auto_resends(tmp_path):
 def test_cleanup_exception_cannot_erase_accepted_state(tmp_path):
     database = RelayDatabase(tmp_path / "relay.sqlite")
 
-    class BrokenCleaner:
-        def delete(self, locations):
+    class BrokenCleaner(FakeCleaner):
+        def delete_verified(self, proofs):
             assert database.records_with_status(RelayStatus.CLEANUP_PENDING)
             raise OSError("USB unplugged")
 

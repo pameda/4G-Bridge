@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fourg-bridge"
-version = "0.1.10"
+version = "0.1.13"
 description = "Privacy-first QDC507 modem controller and SMS to iMessage bridge for macOS"
 requires-python = ">=3.14"
 dependencies = [

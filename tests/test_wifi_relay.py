@@ -12,8 +12,16 @@ import pytest
 from fourg_bridge.app.controller import ApplicationController
 from fourg_bridge.app.runtime import ModemRuntime
 from fourg_bridge.imessage.bridge import MessagesBridge
-from fourg_bridge.models import DataState, ModemSnapshot, RawSMSPart, RelayResult, RelayStatus
+from fourg_bridge.models import (
+    CleanupProof,
+    DataState,
+    ModemSnapshot,
+    RawSMSPart,
+    RelayResult,
+    RelayStatus,
+)
 from fourg_bridge.sms.assembler import SMSAssembler
+from fourg_bridge.sms.receiver import CleanupResult
 from fourg_bridge.sms.relay import SMSRelay
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.settings import Settings
@@ -34,9 +42,15 @@ def test_pdu_relay_with_cellular_data_off(tmp_path):
     bridge = MessagesBridge(runner, SimpleNamespace(get_target=lambda: "test@example.invalid"))
     database = RelayDatabase(tmp_path / "relay.sqlite")
     receiver = SimpleNamespace(
-        poll=lambda: (raw,), delete=lambda locations: (deleted.append(locations) or True)
+        poll=lambda: (raw,),
+        identity="test",
+        sim_key="sim",
+        proofs=lambda message: (CleanupProof("ME", 1, "a" * 64, "b" * 64),),
+        delete_verified=lambda proofs: (deleted.append(proofs) or CleanupResult.DELETED),
     )
     runtime = ModemRuntime.__new__(ModemRuntime)
+    runtime._database = database
+    runtime._sms_identity = ("test", "sim")
     runtime._data = SimpleNamespace(state=DataState.OFF)
     runtime._receiver = receiver
     runtime._assembler = SMSAssembler()
@@ -79,6 +93,7 @@ def test_controller_polls_sms_before_network_status_even_without_4g(monkeypatch,
     app._rescan_lock = threading.Lock()
     app._rescan_lock.acquire()
     app._settings = Settings(relay_enabled=True)  # Auto data disabled and no allowance.
+    app._database = SimpleNamespace(blocked="")
     app._bridge = SimpleNamespace(target_status=lambda: RelayResult(target_ready))
     app._discovery = SimpleNamespace(discover=lambda: object())
     app._runtime = SimpleNamespace(

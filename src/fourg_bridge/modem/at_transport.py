@@ -3,7 +3,8 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from fourg_bridge.models import ATResponse
@@ -41,12 +42,23 @@ class ATTransport:
         self._reader = reader
         self._urc_handler = urc_handler
         self._queue: queue.Queue[_Request | None] = queue.Queue()
+        self._transaction_lock = threading.RLock()
         self._thread = threading.Thread(target=self._run, name="QDC507-AT", daemon=True)
         self._thread.start()
 
     def transact(
         self, command: str, payload: bytes | None = None, timeout: float = 5.0
     ) -> ATResponse:
+        with self._transaction_lock:
+            return self._transact(command, payload, timeout)
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Keep identity/read/delete sequences contiguous on this transport."""
+        with self._transaction_lock:
+            yield
+
+    def _transact(self, command: str, payload: bytes | None, timeout: float) -> ATResponse:
         if not command.startswith("AT"):
             raise ValueError("AT command must begin with AT")
         request = _Request(command, payload, timeout)

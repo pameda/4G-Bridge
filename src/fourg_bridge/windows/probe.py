@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import http.client
+import multiprocessing
 import socket
 import ssl
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from multiprocessing.connection import Connection
 
 
 class BoundHTTPS(http.client.HTTPSConnection):
@@ -48,3 +54,104 @@ def online(index: int, address: str) -> bool:
         finally:
             connection.close()
     return False
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    state: str
+
+    @property
+    def online(self) -> bool | None:
+        return (
+            True
+            if self.state == "online"
+            else False
+            if self.state in {"offline", "timeout"}
+            else None
+        )
+
+
+def _probe_worker(pipe: Connection, interfaces: tuple[tuple[int, str], ...]) -> None:
+    try:
+        pipe.send(
+            "online" if any(online(index, address) for index, address in interfaces) else "offline"
+        )
+    except Exception:
+        pipe.send("error")
+    finally:
+        pipe.close()
+
+
+class ProbeRunner:
+    """DNS/TLS/HTTP share a deadline; terminate isolated worker on timeout/cancel."""
+
+    def __init__(self, timeout: float = 6.0) -> None:
+        self.timeout = timeout
+        self._lock = threading.Lock()
+
+    def run(
+        self,
+        interfaces: tuple[tuple[int, str], ...],
+        cancelled: Callable[[], bool],
+        *,
+        worker: Callable[[Connection, tuple[tuple[int, str], ...]], None] = _probe_worker,
+    ) -> ProbeResult:
+        if not self._lock.acquire(blocking=False):
+            return ProbeResult("error")
+        process = None
+        receiver = sender = None
+        try:
+            if cancelled():
+                return ProbeResult("cancelled")
+            context = multiprocessing.get_context("spawn")
+            receiver, sender = context.Pipe(duplex=False)
+            process = context.Process(target=worker, args=(sender, interfaces), daemon=True)
+            deadline = time.monotonic() + self.timeout
+            process.start()
+            sender.close()
+            while time.monotonic() < deadline:
+                if cancelled():
+                    return ProbeResult("cancelled")
+                if receiver.poll(min(0.05, max(0, deadline - time.monotonic()))):
+                    result = receiver.recv()
+                    return ProbeResult(
+                        result if result in {"online", "offline", "error"} else "error"
+                    )
+                if not process.is_alive():
+                    return ProbeResult("error")
+            return ProbeResult("timeout")
+        except (OSError, EOFError, ValueError):
+            return ProbeResult("error")
+        finally:
+            if process and process.pid:
+                if process.is_alive():
+                    process.terminate()
+                process.join(0.5)
+                if process.is_alive():
+                    process.kill()
+                    process.join(0.5)
+                if not process.is_alive():
+                    process.close()
+            if receiver:
+                receiver.close()
+            if sender:
+                sender.close()
+            self._lock.release()
+
+
+def _smoke_worker(pipe: Connection, interfaces: tuple[tuple[int, str], ...]) -> None:
+    if interfaces:
+        time.sleep(60)  # Synthetic stuck resolver; never connects to any network.
+    pipe.send("online")
+    pipe.close()
+
+
+def probe_self_test() -> bool:
+    success = ProbeRunner().run((), lambda: False, worker=_smoke_worker)
+    started = time.monotonic()
+    timeout = ProbeRunner(0.2).run(((0, ""),), lambda: False, worker=_smoke_worker)
+    return (
+        success.state == "online"
+        and timeout.state == "timeout"
+        and time.monotonic() - started < 2.2
+    )

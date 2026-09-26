@@ -17,7 +17,7 @@ from fourg_bridge.network.connectivity import WiFiProbe
 from fourg_bridge.network.ecm import ECMDetector
 from fourg_bridge.network.failover import Action, FailoverPolicy, Observation
 from fourg_bridge.network.traffic import TrafficMonitor
-from fourg_bridge.storage.carrier_budget import CarrierBudgetStore
+from fourg_bridge.storage.scoped_budget import ScopedCarrierBudget
 
 
 class AutoDataMonitor:
@@ -25,9 +25,7 @@ class AutoDataMonitor:
         self.controller = controller
         self.budget = budget
         try:
-            self.carrier_budget = CarrierBudgetStore(
-                controller._settings_store.path.parent / "carrier-budget.sqlite"
-            )
+            self.carrier_budget = ScopedCarrierBudget(controller._settings_store.path.parent)
         except Exception:
             self.carrier_budget = None
         self.policy = FailoverPolicy()

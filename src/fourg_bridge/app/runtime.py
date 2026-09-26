@@ -21,6 +21,7 @@ from fourg_bridge.sms.pdu_decoder import PDUDecodeError, decode_pdu
 from fourg_bridge.sms.receiver import SMSReceiver
 from fourg_bridge.sms.relay import SMSRelay
 from fourg_bridge.storage.database import RelayDatabase
+from fourg_bridge.storage.identity import IdentityStore
 from fourg_bridge.support.privacy import redact_identifier
 
 
@@ -48,7 +49,11 @@ class ModemRuntime:
         self._carrier_number = None
         self._session: USBModemSession = USBSessionFactory(discovery).connect(descriptor)
         self._controller = ModemController(discovery, self._session.transport)
-        self._receiver = SMSReceiver(self._session.transport)
+        self._receiver = SMSReceiver(
+            self._session.transport, identity=IdentityStore(database.path.parent)
+        )
+        self._sms_identity = None
+        self.carrier_sim_key = None
         self._assembler = SMSAssembler()
         self._relay = SMSRelay(database, bridge, self._receiver)
         self._relay.recover_interrupted()
@@ -121,9 +126,18 @@ class ModemRuntime:
 
     def poll_sms(self, *, relay_enabled: bool = True) -> str | None:
         recent: str | None = None
+        relay_enabled = relay_enabled and not self._database.blocked
         if relay_enabled:
             self._relay.retry_cleanup()
-        for raw in self._receiver.poll():
+        parts = self._receiver.poll()
+        identity = (self._receiver.identity, self._receiver.sim_key)
+        if self._sms_identity != identity:
+            self._assembler = SMSAssembler()
+            self.carrier_usage = None
+            self.carrier_allowance = None
+            self.carrier_sim_key = None
+            self._sms_identity = identity
+        for raw in parts:
             try:
                 part = decode_pdu(raw)
             except PDUDecodeError:
@@ -153,6 +167,7 @@ class ModemRuntime:
                 usage = parse_usage(message.sender, message.body, message.timestamp)
                 if usage:
                     self.carrier_usage = usage
+                    self.carrier_sim_key = self._receiver.sim_key
                 else:
                     self.carrier_usage = None
                 if allowance:

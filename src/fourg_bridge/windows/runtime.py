@@ -22,10 +22,13 @@ from fourg_bridge.sms.assembler import SMSAssembler
 from fourg_bridge.sms.pdu_decoder import decode_pdu
 from fourg_bridge.sms.receiver import SMSReceiver
 from fourg_bridge.storage.carrier_budget import CarrierBudgetStore
-from fourg_bridge.support.event_log import EventLog
+from fourg_bridge.support.event_log import EVENTS, EventLog
 from fourg_bridge.windows import native, platform
+from fourg_bridge.windows.diagnostics import MESSAGES, Diagnostic, diagnostic
 from fourg_bridge.windows.metric import MetricLease
+from fourg_bridge.windows.notifications import NetworkNotifications
 from fourg_bridge.windows.policy import ControllerPolicy
+from fourg_bridge.windows.probe import ProbeRunner
 from fourg_bridge.windows.settings import Preferences
 
 
@@ -57,7 +60,14 @@ class Runtime:
         self.commands: queue.Queue[str] = queue.Queue(maxsize=16)
         self.sms_commands: queue.Queue[QueryRequest] = queue.Queue(maxsize=1)
         self._query_pending = threading.Event()
-        self.log = EventLog()
+        self.log = EventLog(
+            catalog=EVENTS
+            | {
+                "win_" + code: ("信息", "连接诊断", title + "；" + action)
+                for code, (title, action) in MESSAGES.items()
+            }
+        )
+        self.diagnostic: Diagnostic = diagnostic("missing")
         self.log.add("start")
         self.inventory = platform.Inventory()
         self.policy = ControllerPolicy()
@@ -66,6 +76,7 @@ class Runtime:
         self.data_on = False
         self._manual_connection = False
         self.sim_verified = False
+        self.registered = False
         self._sim_key = ""
         self.protection_failed = False
         self.wifi_online: bool | None = None
@@ -74,6 +85,12 @@ class Runtime:
         self._closing = threading.Event()
         self._suspended = threading.Event()
         self._control_lock = threading.RLock()
+        self._change_lock = threading.RLock()
+        self._cancel_enable = threading.Event()
+        self._enabling = False
+        self._network_epoch = 0
+        self._probe = ProbeRunner()
+        self._notifications = NetworkNotifications(self._network_changed)
         self._adapter: platform.Adapter | None = None
         self._guard_thread = threading.Thread(target=self._guard, daemon=True)
         self._net_thread = threading.Thread(target=self._network_loop, daemon=True)
@@ -84,6 +101,8 @@ class Runtime:
         self._refresh = threading.Event()
 
     def start(self) -> None:
+        if not self._notifications.start():
+            self._notify("系统网络事件不可用，已保留两秒轮询检测。")
         self._net_thread.start()
         self._guard_thread.start()
         self._sms_thread.start()
@@ -91,6 +110,13 @@ class Runtime:
     def command(self, action: str) -> None:
         if action not in {"on", "off", "rescan", "sleep", "wake"}:
             raise ValueError("unknown action")
+        self._network_epoch += 1
+        if action == "on":
+            self._cancel_enable.clear()
+        else:
+            self._cancel_enable.set()
+        if action == "off":
+            self.preferences.auto_takeover = False
         if action in {"sleep", "wake"}:
             self._suspended.set()
             self.budget.approved = False
@@ -131,99 +157,158 @@ class Runtime:
         self.status = message
         self.events.put(UIEvent("refresh"))
 
+    def _network_changed(self) -> None:
+        self._network_epoch += 1
+        self._refresh.set()
+
+    def _diagnose(self, code: str) -> None:
+        state = diagnostic(code)
+        if state != self.diagnostic:
+            self.log.add("win_" + state.code)
+        self.diagnostic = state
+
+    def _reason(self) -> str:
+        if self._adapter is None:
+            return "missing"
+        if self.protection_failed:
+            return "protection"
+        if not native.is_admin():
+            return "permission"
+        if not self.sim_verified:
+            return "sim"
+        if not self.registered:
+            return "registration"
+        state = self.budget.status().state
+        if state != "ready":
+            return state
+        if self._enabling:
+            return "address"
+        if self.wifi_online:
+            return "wifi"
+        if not (self.preferences.auto_takeover or self._manual_connection):
+            return "disabled"
+        return "ready"
+
     def _change(self, enabled: bool) -> bool:
-        with self._control_lock:
-            adapter = self._adapter
-            if adapter is None:
-                self.data_on = False
-                self._manual_connection = False
-                return not enabled
-            if enabled and (
-                self._closing.is_set()
-                or self._suspended.is_set()
-                or self.budget.status().state != "ready"
-                or not self.sim_verified
-                or self.protection_failed
-            ):
-                self._notify("尚未满足开启条件：检查 SIM、套餐快照及保护状态")
-                return False
-            if not enabled and not adapter.enabled and not self.metric.path.exists():
-                self.data_on = False
-                self._manual_connection = False
-                self.protection_failed = False
-                self.budget.approved = False
-                return True
-            if not native.is_admin():
-                self.protection_failed = adapter.enabled
-                self._notify("网络控制需要管理员权限；尚未执行自动接管或保证数据关闭")
-                return False
-            self.log.add("data_transition")
+        # Long OS operations serialize transitions, not metering or quota observation.
+        with self._change_lock:
+            self._enabling = enabled
             try:
-                if enabled:
+                return self._perform_change(enabled)
+            finally:
+                self._enabling = False
+                self._diagnose(self._reason())
+
+    def _perform_change(self, enabled: bool) -> bool:
+        adapter = self._adapter
+        if adapter is None:
+            self.data_on = False
+            self._manual_connection = False
+            return not enabled
+        if enabled and (
+            self._closing.is_set()
+            or self._suspended.is_set()
+            or self.budget.status().state != "ready"
+            or not self.sim_verified
+            or not self.registered
+            or self.protection_failed
+            or self._cancel_enable.is_set()
+        ):
+            self._notify("尚未满足开启条件：检查 SIM、套餐快照及保护状态")
+            return False
+        if not enabled and not adapter.enabled and not self.metric.path.exists():
+            self.data_on = False
+            self._manual_connection = False
+            self.protection_failed = False
+            self.budget.approved = False
+            return True
+        if not native.is_admin():
+            self.protection_failed = adapter.enabled
+            self._notify("网络控制需要管理员权限；尚未执行自动接管或保证数据关闭")
+            return False
+        self.log.add("data_transition")
+        try:
+            if enabled:
+                with self._control_lock:
                     self._sample(adapter)
-                    self.metric.acquire(adapter.guid)
-                platform.change_adapter(adapter.guid, enabled)
-                self._notify("等待模块取得 IP 地址…" if enabled else "正在验证数据关闭…")
-                deadline = time.monotonic() + (25 if enabled else 8)
-                while time.monotonic() < deadline:
-                    snapshot = platform.inventory()
-                    actual = snapshot.modem()
-                    self.inventory = snapshot
-                    if not enabled and (actual is None or not actual.enabled):
-                        if actual:
-                            self.metric.restore(adapter.guid)
-                        self.data_on = False
-                        self._manual_connection = False
-                        self.protection_failed = False
-                        self.budget.approved = False
-                        self.log.add("data_off")
-                        self._notify("4G 数据已关闭；短信查询仍可使用")
-                        return True
-                    if (
-                        enabled
-                        and actual
-                        and actual.guid == adapter.guid
-                        and actual.usable
-                        and actual.gateway
-                        and not any(
-                            a.default and a.physical and not a.modem for a in snapshot.adapters
-                        )
-                        and self.budget.status().state == "ready"
-                    ):
-                        self.data_on = True
-                        self._adapter = actual
-                        self.protection_failed = False
-                        self.log.add("data_on")
-                        self._notify("4G 网卡已就绪；这不代表 VPN 或互联网端到端连通")
-                        return True
-                    if self._closing.is_set() and enabled:
-                        break
-                    time.sleep(0.5)
-                if enabled:
+                self.metric.acquire(adapter.guid)
+                if self.budget.status().state != "ready" or self._cancel_enable.is_set():
+                    self.metric.restore(adapter.guid)
+                    return False
+            platform.change_adapter(adapter.guid, enabled)
+            self._notify("等待模块取得 IP 地址…" if enabled else "正在验证数据关闭…")
+            deadline = time.monotonic() + (25 if enabled else 8)
+            while time.monotonic() < deadline:
+                if enabled and (
+                    self._cancel_enable.is_set()
+                    or self.budget.status().state != "ready"
+                    or not self.sim_verified
+                    or not self.registered
+                    or self._suspended.is_set()
+                ):
+                    break
+                snapshot = platform.inventory()
+                actual = snapshot.modem()
+                self.inventory = snapshot
+                if not enabled and (actual is None or not actual.enabled):
+                    if actual:
+                        self.metric.restore(adapter.guid)
+                    self.data_on = False
+                    self._manual_connection = False
+                    self.protection_failed = False
+                    self.budget.approved = False
+                    self.log.add("data_off")
+                    self._notify("4G 数据已关闭；短信查询仍可使用")
+                    return True
+                if (
+                    enabled
+                    and actual
+                    and actual.guid == adapter.guid
+                    and actual.usable
+                    and actual.gateway
+                    and not any(a.default and a.physical and not a.modem for a in snapshot.adapters)
+                    and self.budget.status().state == "ready"
+                    and not self._cancel_enable.is_set()
+                    and not self._suspended.is_set()
+                    and self.sim_verified
+                    and self.registered
+                ):
+                    self.data_on = True
+                    self._adapter = actual
+                    self.protection_failed = False
+                    self.log.add("data_on")
+                    self._notify("4G 网卡已就绪；这不代表 VPN 或互联网端到端连通")
+                    return True
+                if self._closing.is_set() and enabled:
+                    break
+                time.sleep(0.5)
+            if enabled:
+                platform.change_adapter(adapter.guid, False)
+                self.metric.restore(adapter.guid)
+            raise platform.PlatformError("未取得可用地址或未能确认关闭")
+        except Exception:
+            if enabled:
+                try:
                     platform.change_adapter(adapter.guid, False)
                     self.metric.restore(adapter.guid)
-                raise platform.PlatformError("未取得可用地址或未能确认关闭")
-            except Exception:
-                if enabled:
-                    try:
-                        platform.change_adapter(adapter.guid, False)
-                        self.metric.restore(adapter.guid)
-                    except Exception:
-                        pass
-                # Do not log OS output, raw AT errors or identifiers.
-                self.protection_failed = True
-                self.log.add("warning")
-                self._notify("网络切换未通过验证；请查看网卡／驱动。保护状态未确认")
-                return False
+                except Exception:
+                    pass
+            # Do not log OS output, raw AT errors or identifiers.
+            self.protection_failed = True
+            self.log.add("warning")
+            self._notify("网络切换未通过验证；请查看网卡／驱动。保护状态未确认")
+            return False
 
     def _network_loop(self) -> None:
         previous_guid: str | None = None
         while not self._stop.is_set():
+            self._refresh.clear()
             try:
                 snapshot = platform.inventory()
                 self.inventory = snapshot
                 adapter = snapshot.modem()
                 self._adapter = adapter
+                self._diagnose(self._reason())
                 guid = adapter.guid if adapter else None
                 if guid != previous_guid:
                     self.data_on = False
@@ -254,18 +339,50 @@ class Runtime:
                         safe = self._change(False)
                         if command == "wake" and safe:
                             self._suspended.clear()
+                        if command in {"rescan", "wake"} and safe:
+                            self._cancel_enable.clear()
                         self.policy = ControllerPolicy()
                 if adapter:
                     # External enable is also subject to quota; do not claim it is OFF.
                     if adapter.enabled and not self.data_on and not self.protection_failed:
                         self._change(False)
                     wifi = [item for item in snapshot.adapters if item.wifi and item.usable]
-                    self.wifi_online = any(platform.wifi_probe(item) for item in wifi)
+                    epoch = self._network_epoch
+                    probe_state = "offline"
+                    if wifi:
+
+                        def cancelled(version: int = epoch) -> bool:
+                            return (
+                                version != self._network_epoch
+                                or self._closing.is_set()
+                                or self._stop.is_set()
+                                or self._suspended.is_set()
+                            )
+
+                        result = self._probe.run(
+                            tuple((item.index, item.ipv4) for item in wifi),
+                            cancelled,
+                        )
+                        self.wifi_online = result.online
+                        probe_state = result.state
+                    else:
+                        self.wifi_online = False
+                    if epoch != self._network_epoch:
+                        continue
+                    reason = self._reason()
+                    self._diagnose(
+                        "probe_timeout"
+                        if reason == "ready" and probe_state == "timeout"
+                        else "probe_error"
+                        if reason == "ready" and probe_state == "error"
+                        else reason
+                    )
                     decision = self.policy.decide(
                         snapshot,
                         authorized=(self.preferences.auto_takeover or self._manual_connection)
                         and native.is_admin()
                         and self.sim_verified
+                        and self.registered
                         and not self._suspended.is_set()
                         and not self.protection_failed,
                         budget=self.budget.status().state,
@@ -281,7 +398,6 @@ class Runtime:
                 self._notify("设备检测失败，已暂停自动接管；正在尝试安全关闭")
                 self._change(False)
             self._refresh.wait(2)
-            self._refresh.clear()
 
     def _sample(self, adapter: platform.Adapter) -> None:
         rx, tx = native.interface_counters(adapter.index)
@@ -318,9 +434,10 @@ class Runtime:
                     with self._control_lock:
                         self._sample(adapter)
                 state = self.budget.status().state
-                if (
-                    state != "ready" or not self.sim_verified or self._suspended.is_set()
-                ) and self.data_on:
+                if (state != "ready" or not self.sim_verified or self._suspended.is_set()) and (
+                    self.data_on or self._enabling
+                ):
+                    self._cancel_enable.set()
                     self._change(False)
                 if state != self._last_reason:
                     self._last_reason = state
@@ -332,6 +449,7 @@ class Runtime:
                         self.events.put(UIEvent("refresh"))
             except Exception:
                 self.log.add("warning")
+                self._cancel_enable.set()
                 self._change(False)
 
     def _sms_loop(self) -> None:
@@ -432,6 +550,7 @@ class Runtime:
             responses[command] = response.lines if response.ok else ()
         _, rssi = parse_csq(responses["AT+CSQ"])
         registration = parse_registration(responses["AT+CEREG?"])
+        self.registered = registration in (1, 5)
         sim = (
             "就绪"
             if any(line.strip() == "+CPIN: READY" for line in responses["AT+CPIN?"])
@@ -441,13 +560,18 @@ class Runtime:
         verified = sim == "就绪" and len(identifiers) == 1
         if verified:
             sim_key = hashlib.sha256(identifiers[0].encode("ascii")).hexdigest()
+            if sim_key != self._sim_key:
+                self.sim_verified = False
+                if self.data_on or self._enabling:
+                    self._cancel_enable.set()
+                    self._change(False)
             with self._control_lock:
                 if sim_key != self._sim_key:
-                    if self.data_on:
-                        self._change(False)
                     self.budget = CarrierBudgetStore(self.directory / f"carrier-{sim_key}.sqlite")
                     self._sim_key = sim_key
                     self._last_sample = None
+                    if self.preferences.auto_takeover and not self._suspended.is_set():
+                        self._cancel_enable.clear()
                 self.sim_verified = True
         else:
             self.sim_verified = False
@@ -464,9 +588,12 @@ class Runtime:
 
     def shutdown(self) -> bool:
         self._closing.set()
+        self._cancel_enable.set()
+        self._network_changed()
         self.preferences.auto_takeover = False  # Memory only: never auto-enable during shutdown.
         ok = self._change(False)
         if ok:
+            self._notifications.close()
             self._stop.set()
             self._refresh.set()
         else:

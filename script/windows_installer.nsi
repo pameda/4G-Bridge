@@ -2,7 +2,7 @@ Unicode true
 RequestExecutionLevel user
 SetCompressor zlib
 Name "4G Bridge"
-OutFile "..\artifacts\4G-Bridge-0.2.0-preview.2-windows-x64-setup.exe"
+OutFile "..\artifacts\4G-Bridge-0.2.0-preview.3-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\4GBridge"
 !include "MUI2.nsh"
 !insertmacro MUI_PAGE_WELCOME
@@ -35,7 +35,7 @@ Section "4G Bridge"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\4G Bridge.lnk" "$INSTDIR\4G Bridge.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\4GBridge" "DisplayName" "4G Bridge"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\4GBridge" "DisplayVersion" "0.2.0-preview.2"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\4GBridge" "DisplayVersion" "0.2.0-preview.3"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\4GBridge" "UninstallString" '$"$INSTDIR\Uninstall.exe$"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\4GBridge" "DisplayIcon" "$INSTDIR\4G Bridge.exe"
 SectionEnd

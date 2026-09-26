@@ -127,7 +127,10 @@ def test_carrier_guard_cuts_at_eighty_before_confirmation(tmp_path, monkeypatch)
     worker, calls = monitor(
         tmp_path, monkeypatch, Settings(carrier_policy_enabled=True, auto_data_enabled=True)
     )
-    worker.carrier_budget.update_plan(CarrierUsage(1000, 790, datetime.now(UTC)))
+    worker.carrier_budget.bind("8" * 20)
+    worker.carrier_budget.update_plan(
+        CarrierUsage(1000, 790, datetime.now(UTC)), sim_key=worker.carrier_budget.key
+    )
     worker.carrier_budget.observe("en1", "boot", 0, 0)
     worker._traffic.sample = lambda _: SimpleNamespace(interface="en1", rx_bytes=5, tx_bytes=5)
     worker._guard()

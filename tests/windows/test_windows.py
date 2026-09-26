@@ -347,6 +347,7 @@ class StoreTests(unittest.TestCase):
     def test_enable_exception_attempts_rollback(self, lease, counters, admin, change, scan):
         runtime = Runtime(self.path)
         runtime._adapter, runtime.sim_verified = MODEM, True
+        runtime.registered = True
         runtime.budget.update_plan(CarrierUsage(10000, 0, datetime.now().astimezone()))
         self.assertFalse(runtime._change(True))
         self.assertEqual([call.args[1] for call in change.call_args_list], [True, False])

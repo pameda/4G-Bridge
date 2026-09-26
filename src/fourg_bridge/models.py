@@ -44,6 +44,7 @@ class RelayStatus(StrEnum):
     SENT = "sent"
     DELIVERY_UNKNOWN = "delivery_unknown"
     CLEANUP_PENDING = "cleanup_pending"
+    CLEANUP_BLOCKED = "cleanup_blocked"
     FAILED = "failed"
 
 
@@ -108,6 +109,14 @@ class RawSMSPart:
     storage: str
     index: int
     pdu: str
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupProof:
+    storage: str
+    index: int
+    pdu_hash: str
+    identity: str
 
 
 @dataclass(frozen=True, slots=True)

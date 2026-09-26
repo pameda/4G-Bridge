@@ -61,7 +61,12 @@ class PreviewDelegate:
         return False, "尚未发送查询", None
 
     def carrier_usage(self):
-        return CarrierUsage(60 * 1024**3, 12 * 1024**3, datetime.now().astimezone())
+        fraction = getattr(self, "preview_fraction", 0.2)
+        return (
+            CarrierUsage(60 * 1024**3, int(fraction * 60 * 1024**3), datetime.now().astimezone())
+            if fraction is not None
+            else None
+        )
 
     def carrier_policy_status(self):
         return "界面测试：80% 确认，98% 停止 · 非真实套餐"
@@ -173,12 +178,59 @@ def run(output: Path) -> None:
             content.cacheDisplayInRect_toBitmapImageRep_(content.bounds(), bitmap)
             data = bitmap.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
             data.writeToFile_atomically_(str(output / f"{appearance}-{index}.png"), True)
+    # All status bands use synthetic values; no quota or network state is written.
+    for appearance in ("NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"):
+        window.window().setAppearance_(AppKit.NSAppearance.appearanceNamed_(appearance))
+        for fraction, stage in ((None, None), (0.2, 0), (0.65, 0), (0.76, 0), (0.85, 1), (0.99, 2)):
+            delegate.preview_fraction = fraction
+            window.refresh(False)
+            menu.update_(delegate.snapshot)
+            assert window._usage_percent.stringValue() == window._carrier_ring.value.stringValue()
+            assert window._usage_percent.textColor() == window._carrier_ring.value.textColor()
+            assert [
+                i
+                for i, marker in enumerate(window._stage_markers)
+                if marker.stringValue() == "● 当前区间"
+            ] == ([] if stage is None else [stage])
+            for index in (4, 6):
+                window._tabs.setSelectedTabViewItemIndex_(index)
+                Foundation.NSRunLoop.currentRunLoop().runUntilDate_(
+                    Foundation.NSDate.dateWithTimeIntervalSinceNow_(0.1)
+                )
+                content = window.window().contentView()
+                content.layoutSubtreeIfNeeded()
+                bitmap = content.bitmapImageRepForCachingDisplayInRect_(content.bounds())
+                content.cacheDisplayInRect_toBitmapImageRep_(content.bounds(), bitmap)
+                bitmap.representationUsingType_properties_(
+                    AppKit.NSBitmapImageFileTypePNG, {}
+                ).writeToFile_atomically_(
+                    str(output / f"usage-{appearance}-{fraction}-{index}.png"), True
+                )
+    delegate.preview_fraction = 0.2
+    window.refresh(False)
+    menu.update_(delegate.snapshot)
+    # Hit-test actual laid-out text, icons and blank row space. Display-only
+    # descendants must route to the table, which owns native mouse selection.
+    table = window._sidebar.table
+    assert table.selectionHighlightStyle() == AppKit.NSTableViewSelectionHighlightStyleRegular
+    assert not table.allowsMultipleSelection()
+    assert table.acceptsFirstMouse_(None)
+    for row in range(len(DESTINATIONS)):
+        cell = table.viewAtColumn_row_makeIfNecessary_(0, row, True)
+        assert not cell.textField().isSelectable()
+        assert not cell.textField().isEditable()
+        for child in (cell.textField(), cell.imageView(), cell):
+            bounds = child.bounds()
+            point = AppKit.NSMakePoint(AppKit.NSMidX(bounds), AppKit.NSMidY(bounds))
+            point = child.convertPoint_toView_(point, table.superview())
+            assert table.hitTest_(point) == table, (row, child)
     # Verify keyboard/table navigation and constrained resizing without invoking live actions.
     for row, (index, _title, _icon) in enumerate(DESTINATIONS):
         window._sidebar.table.selectRowIndexes_byExtendingSelection_(
             Foundation.NSIndexSet.indexSetWithIndex_(row), False
         )
         assert window._tabs.selectedTabViewItemIndex() == index
+        assert window._sidebar.table.selectedRowIndexes().count() == 1
     for width, height in ((1000, 700), (1280, 820)):
         window.window().setContentSize_(AppKit.NSMakeSize(width, height))
         for index in range(8):

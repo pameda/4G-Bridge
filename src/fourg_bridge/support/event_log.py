@@ -1,6 +1,7 @@
 """Bounded, memory-only Chinese event journal accepting only catalogued event codes."""
 
 from collections import deque
+from collections.abc import Mapping
 from datetime import datetime
 from threading import Lock
 
@@ -27,12 +28,13 @@ EVENTS = {
 
 
 class EventLog:
-    def __init__(self, limit: int = 500):
+    def __init__(self, limit: int = 500, catalog: Mapping[str, tuple[str, str, str]] = EVENTS):
+        self._catalog = dict(catalog)
         self._rows: deque[tuple[str, str]] = deque(maxlen=limit)
         self._lock = Lock()
 
     def add(self, code: str) -> None:
-        level, category, text = EVENTS[code]  # Reject arbitrary strings and private payloads.
+        level, category, text = self._catalog[code]  # Reject arbitrary strings/private payloads.
         line = f"{datetime.now().astimezone():%m-%d %H:%M:%S}  [{level}] [{category}] {text}"
         with self._lock:
             self._rows.append((level, line))

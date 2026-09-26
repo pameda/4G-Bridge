@@ -171,6 +171,7 @@ class Window:
         self.label(page, "totals")
         self.label(page, "percent", style="Usage.TLabel")
         self.label(page, "policy", style="Status.TLabel")
+        self.label(page, "diagnostic", style="Muted.TLabel")
         row = ttk.Frame(page)
         row.pack(anchor="w", pady=20)
         ttk.Button(row, text="开启 4G…", command=self.enable).pack(side="left", padx=(0, 10))
@@ -634,6 +635,9 @@ class Window:
             usage = runtime.budget.usage()
             state = runtime.budget.status().state
             self.labels["policy"].set(STATE_NAMES[state])
+            self.labels["diagnostic"].set(
+                runtime.diagnostic.title + "\n" + runtime.diagnostic.action
+            )
             self.labels["carrier_policy"].set(f"数据保护：{STATE_NAMES[state]}")
             self.labels["usage"].set(
                 f"已用 {amount(usage.used_bytes)}\n总量 {amount(usage.total_bytes)}"

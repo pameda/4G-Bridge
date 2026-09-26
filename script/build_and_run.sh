@@ -15,12 +15,21 @@ fi
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 ARTIFACTS="$ROOT_DIR/artifacts"
+BUILD_DIR="$ROOT_DIR/build"
+DIST_DIR="$ROOT_DIR/dist"
+if [[ "$MODE" == "--package-isolated" ]]; then
+  # Validate an update without stopping the modem controller currently in use.
+  BUILD_DIR="$ROOT_DIR/artifacts/staged-build"
+  DIST_DIR="$ROOT_DIR/artifacts/staged-dist"
+  APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+  APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+fi
 
 build_app() {
   "$ROOT_DIR/script/test.sh"
-  /bin/rm -rf "$ROOT_DIR/build" "$APP_BUNDLE"
+  /bin/rm -rf "$BUILD_DIR" "$APP_BUNDLE"
   cd "$ROOT_DIR/packaging"
-  "$PYTHON" py2app_setup.py py2app --arch=arm64
+  "$PYTHON" py2app_setup.py py2app --arch=arm64 --dist-dir="$DIST_DIR" --bdist-base="$BUILD_DIR"
 
   while IFS= read -r -d '' component; do
     if /usr/bin/file "$component" | /usr/bin/grep -q 'Mach-O'; then
@@ -45,7 +54,7 @@ package_dmg() {
   mkdir -p "$ARTIFACTS"
   stage="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-dmg.XXXXXX)"
   mount_point="$(/usr/bin/mktemp -d /private/tmp/4g-bridge-mount.XXXXXX)"
-  dmg="$ARTIFACTS/4G-Bridge-0.1.10-arm64.dmg"
+  dmg="$ARTIFACTS/4G-Bridge-0.1.13-arm64.dmg"
   sha_file="$dmg.sha256"
   trap '/bin/rm -rf "$stage" "$mount_point"' RETURN
   /bin/cp -R "$APP_BUNDLE" "$stage/"
@@ -59,7 +68,9 @@ package_dmg() {
   echo "$sha_file"
 }
 
-/usr/bin/pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+if [[ "$MODE" != "--package-isolated" ]]; then
+  /usr/bin/pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+fi
 build_app
 verify_app
 
@@ -83,13 +94,13 @@ case "$MODE" in
     /bin/sleep 2
     /usr/bin/pgrep -x "$APP_NAME" >/dev/null
     ;;
-  --package|package)
+  --package|package|--package-isolated)
     package_dmg
     ;;
   --build-only|build-only)
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--package|--build-only]" >&2
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--package|--package-isolated|--build-only]" >&2
     exit 2
     ;;
 esac

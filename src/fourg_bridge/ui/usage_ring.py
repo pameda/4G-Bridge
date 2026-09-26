@@ -1,7 +1,18 @@
-"""Accessible native ring: carrier billing only, never local interface estimates."""
+"""Accessible carrier-plan ring with shared, presentation-only warning thresholds."""
 
 import AppKit
 import objc
+
+from fourg_bridge.support.presentation import usage_style
+
+
+def usage_color(name):
+    return {
+        "blue": AppKit.NSColor.systemBlueColor,
+        "orange": AppKit.NSColor.systemOrangeColor,
+        "red": AppKit.NSColor.systemRedColor,
+        "secondary": AppKit.NSColor.secondaryLabelColor,
+    }[name]()
 
 
 class UsageRing(AppKit.NSView):
@@ -32,11 +43,15 @@ class UsageRing(AppKit.NSView):
     @objc.python_method
     def update(self, usage):
         self.fraction = usage.fraction if usage else None
-        value = f"{self.fraction * 100:.1f}%" if usage else "—"
+        style = usage_style(self.fraction)
+        value = style.percent
         self.value.setStringValue_(value)
+        self.value.setTextColor_(usage_color(style.color))
         self.caption.setStringValue_("已使用" if usage else "待查询")
         self.setAccessibilityLabel_(
-            f"运营商套餐已使用 {value}" if usage else "尚无可确认的运营商套餐百分比"
+            f"套餐估算已使用 {value}，{style.title}"
+            if style.stage is not None
+            else "尚无可确认的运营商套餐百分比"
         )
         self.setNeedsDisplay_(True)
 
@@ -45,20 +60,14 @@ class UsageRing(AppKit.NSView):
         track = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((7, 7), (98, 98)))
         track.setLineWidth_(7)
         track.stroke()
-        if self.fraction is None or self.fraction <= 0:
+        style = usage_style(self.fraction)
+        if style.stage is None or self.fraction <= 0:
             return
-        color = (
-            AppKit.NSColor.systemRedColor()
-            if self.fraction >= 0.98
-            else AppKit.NSColor.systemOrangeColor()
-            if self.fraction >= 0.8
-            else AppKit.NSColor.systemBlueColor()
-        )
-        color.setStroke()
+        usage_color(style.color).setStroke()
         arc = AppKit.NSBezierPath.bezierPath()
         arc.setLineWidth_(7)
         arc.setLineCapStyle_(AppKit.NSRoundLineCapStyle)
         arc.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
-            (56, 56), 49, 90, 90 - 360 * self.fraction, True
+            (56, 56), 49, 90, 90 - 360 * min(self.fraction, 1), True
         )
         arc.stroke()

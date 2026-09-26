@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -48,7 +49,9 @@ def test_runner_uses_argv_and_maps_denial(tmp_path) -> None:
         result = AppleScriptRunner(script).run("target", "private")
     assert result.error == RelayError.AUTOMATION_DENIED
     arguments = run.call_args.args[0]
-    assert arguments[-2:] == ["target", "private"]
+    assert arguments[-1] == "send"
+    assert "target" not in arguments and "private" not in arguments
+    assert json.loads(run.call_args.kwargs["input"]) == {"target": "target", "body": "private"}
     assert "private" not in script.read_text(encoding="utf-8")
 
 
@@ -101,7 +104,11 @@ def test_check_mode_never_uses_send_action(tmp_path):
     completed = type("Completed", (), {"returncode": 0, "stdout": "CHECKED", "stderr": ""})()
     with patch("subprocess.run", return_value=completed) as run:
         assert MessagesBridge(AppleScriptRunner(script), Target()).check().accepted
-    assert run.call_args.args[0][-3:] == ["check", "test@example.invalid", ""]
+    assert run.call_args.args[0][-1] == "check"
+    assert json.loads(run.call_args.kwargs["input"]) == {
+        "target": "test@example.invalid",
+        "body": "",
+    }
 
 
 def test_send_marker_and_missing_resource(tmp_path):

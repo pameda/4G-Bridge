@@ -1,14 +1,14 @@
 # 4G Bridge Windows 预览版
 
-版本：0.2.0-preview.2。目标 Windows 11 x64。**不包含 iMessage、Apple 账号登录或短信转发功能。**
+版本：0.2.0-preview.3。目标 Windows 11 x64。**不包含 iMessage、Apple 账号登录或短信转发功能。**
 
 这是新的平台适配，不能用 macOS 实机结果证明 Windows 硬件兼容。Windows QDC507 实机验收尚未执行；自动测试与 Windows 构建结果见 GitHub Actions 的 Windows preview 工作流。
 
 ## 安装与使用
 
-从 [Windows 预览版发布页](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.2) 下载 `4G-Bridge-0.2.0-preview.2-windows-x64-setup.exe` 或便携 ZIP，并核对同页的 `windows-SHA256SUMS.txt`。尚未签名，可能出现 SmartScreen 提示，不应关闭系统安全保护。安装器安装到当前用户的应用目录，不安装驱动，不默认注册登录启动。更新前从托盘退出旧版；卸载保留设置及流量锁定记录，避免重新安装绕过保护。
+从 [Windows 预览版发布页](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.3) 下载 `4G-Bridge-0.2.0-preview.3-windows-x64-setup.exe` 或便携 ZIP，并核对同页的 `windows-SHA256SUMS.txt`。尚未签名，可能出现 SmartScreen 提示，不应关闭系统安全保护。安装器安装到当前用户的应用目录，不安装驱动，不默认注册登录启动。更新前从托盘退出旧版；卸载保留设置及流量锁定记录，避免重新安装绕过保护。
 
-新版 [构建记录](https://github.com/pameda/4G-Bridge/actions/runs/36247144257) 对提交 `1815096` 通过 45 项 Windows 回归，以及源码、打包后、安装后三轮各 18 组浅深色百分比边界检查、六页布局、托盘启动与安装卸载检查；下载后 SHA-256 一致。详见 [本版测试说明](docs/windows-preview-2-release.md)。这不代替 Windows 11 或 QDC507 实机验收。
+历史 preview.2 的 [构建记录](https://github.com/pameda/4G-Bridge/actions/runs/36247144257) 和 [测试说明](docs/windows-preview-2-release.md) 保留追溯；preview.3 验证以本版发布页为准。云端检查不代替 Windows 11 或 QDC507 实机验收。
 
 1. 安装并启动，接入 QDC507，关闭其他占用模块的控制软件。
 2. 先查看“设备”页，确认系统网卡与 AT 串口已就绪。只匹配 `2CA3:4006` / `2C7C:0125`；没有兼容网卡或有多个模块时不猜测控制目标。
@@ -19,6 +19,9 @@
 关闭窗口保留系统托盘，单击托盘打开窗口；托盘失败则保留任务栏窗口。退出会先尝试关闭数据，无法确认时警告，不伪称已关闭。
 
 ## 功能与边界
+
+- preview.3：系统接口／Wi-Fi ACM 事件唤醒检测，250ms 合并通知并保留2秒轮询，不请求定位；DNS/TLS/HTTP 由独立进程执行，整轮6秒超时，网络变化／关闭／睡眠时取消。计量锁不再被长时间网卡命令占用，开启成功前再次检查额度和取消标记。
+- 中文诊断区明确显示权限、SIM、注册、套餐、地址与探测原因；与内存日志共用固定文案，不展示私有原始错误。物理断开只缩短检测等待，仍需驱动、路由和 DHCP 就绪，不能承诺无缝切换。
 
 - 中文总览、运营商与流量、设备、应用网络、运行日志、设置六页；系统主题控件、浅深色、蓝色信号图标及套餐环形图。
 - 总览突出套餐估算已用百分比；环形图与百分比同色：低于 60% 蓝色、60% 起橙色、75% 起红色预警。明确标记当前所在的低于 80%、80% 至 98%、达到 98% 区间；未知数据不显示为 0%。预警颜色不改变实际保护状态，过期／锁定状态另行展示。

@@ -18,16 +18,15 @@ DESTINATIONS = (
 )
 
 
-class SidebarRow(AppKit.NSTableRowView):
-    def drawBackgroundInRect_(self, rect):
-        # A semantic, non-emphasized selection also stays legible in inactive windows.
-        if not self.isSelected():
-            objc.super(SidebarRow, self).drawBackgroundInRect_(rect)
-            return
-        AppKit.NSColor.controlAccentColor().colorWithAlphaComponent_(0.12).setFill()
-        AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-            AppKit.NSInsetRect(self.visibleRect(), 4, 2), 7, 7
-        ).fill()
+class SidebarTable(AppKit.NSTableView):
+    def hitTest_(self, point):
+        # This source list contains display-only cells. Let NSTableView handle
+        # the entire row instead of labels/images intercepting mouseDown.
+        hit = objc.super(SidebarTable, self).hitTest_(point)
+        return self if hit is not None else None
+
+    def acceptsFirstMouse_(self, _event):
+        return True
 
 
 class SidebarCell(AppKit.NSTableCellView):
@@ -67,15 +66,16 @@ class Sidebar(AppKit.NSObject):
             True,
             10,
         )
-        self.table = AppKit.NSTableView.alloc().init()
+        self.table = SidebarTable.alloc().init()
         column = AppKit.NSTableColumn.alloc().initWithIdentifier_("destination")
         column.setWidth_(170)
         self.table.addTableColumn_(column)
         self.table.setHeaderView_(None)
         self.table.setStyle_(AppKit.NSTableViewStyleSourceList)
-        self.table.setSelectionHighlightStyle_(AppKit.NSTableViewSelectionHighlightStyleNone)
+        self.table.setSelectionHighlightStyle_(AppKit.NSTableViewSelectionHighlightStyleRegular)
         self.table.setRowHeight_(38)
         self.table.setAllowsEmptySelection_(False)
+        self.table.setAllowsMultipleSelection_(False)
         self.table.setBackgroundColor_(AppKit.NSColor.clearColor())
         self.table.setDataSource_(self)
         self.table.setDelegate_(self)
@@ -123,13 +123,12 @@ class Sidebar(AppKit.NSObject):
         cell = SidebarCell.alloc().init()
         image = symbol(icon, 18)
         text = label(title, 13)
+        text.setSelectable_(False)
+        text.setEditable_(False)
         pin(stack([image, text], True, 10), cell, 6)
         cell.setTextField_(text)
         cell.setImageView_(image)
         return cell
-
-    def tableView_rowViewForRow_(self, _table, _row):
-        return SidebarRow.alloc().init()
 
     def tableViewSelectionDidChange_(self, _notification):
         row = self.table.selectedRow()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -25,7 +26,8 @@ class AppleScriptRunner:
             return RelayResult(False, RelayError.MESSAGES_UNAVAILABLE, "script resource missing")
         try:
             completed = subprocess.run(
-                ["/usr/bin/osascript", str(self._script_path), action, target, message],
+                ["/usr/bin/osascript", str(self._script_path), action],
+                input=json.dumps({"target": target, "body": message}, ensure_ascii=False),
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,

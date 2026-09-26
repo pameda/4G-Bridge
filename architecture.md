@@ -1,5 +1,14 @@
 # 4G Bridge 架构
 
+## 0.1.13 / Windows preview.3 安全与切网
+
+- Mac `ScopedCarrierBudget` 使用安装内随机密钥生成 SIM HMAC，身份失效即撤销本次授权；首次绑定只接收绑定时间之后的套餐回复。旧无归属账本不导入，SIM 切换重建 counter 基线，不清除已有用量或锁定。
+- Relay schema 2 增加逐段 `CleanupProof`（存储区、序号、PDU hash、设备＋SIM HMAC）。`delete_verified` 返回 deleted / pending / blocked；AT 组合事务锁保护身份查询、全量列表核验和单槽删除。blocked 不自动重试删除或重发，旧记录无凭据默认 blocked。此锁只约束本应用，不能保证对抗其他控制器或模块固件的并发修改，因此要求独占使用模块。
+- 转发 SQLite 升级前使用 backup API；新版本库只读检查后拒绝打开，损坏时保留完整文件组并阻断写入，不新建空库继续发送。UI 可继续展示网络功能。
+- 固定 AppleScript 通过 Foundation 读取 JSON 标准输入，目标／正文不进入 argv 或临时文件；超时继续作为投递不确定处理。
+- Windows 系统接口通知和 WLAN ACM 通知只唤醒检测线程，250ms 合并事件、2秒轮询兜底；不请求定位。单独 spawn 进程承载 DNS/TLS/HTTP，6秒整轮 deadline，退出／网络代际变化时终止回收。冻结 EXE 在创建窗口和互斥锁前执行 freeze_support。
+- Windows 长时间网络切换使用独立 transition 锁，不阻塞 counter 计量锁；关闭操作和额度守卫可设置开启取消标记，提交成功前再次核验授权／额度／SIM。UI 与中文日志共用固定原因目录，原始异常不进入日志。
+
 ## Windows 预览版平台边界
 
 `windows/` 为独立入口，不导入 macOS AppKit／Messages UI。`native.py` 封装系统 COM 和 GetIfEntry2；`platform.py` 以固定 PowerShell 脚本做设备发现和 GUID＋VID/PID 双重核验的网卡操作。`metric.py` 保存模块 IPv4 metric 租约，在关闭及下次启动恢复，绝不覆盖无关接口。
@@ -47,7 +56,7 @@ macOS 网络
 - `modem/`：VID/PID 发现、动态 endpoint 扫描、唯一 USB 读线程、AT parser 与 modem snapshot。
 - `cellular/`：networksetup 服务开关与 `CGATT` 安全回退。
 - `sms/`：PDU 解码、多段乱序组装、稳定 SHA-256 去重、重试与成功后清理。
-- `imessage/`：固定 AppleScript、argv 传参、iMessage service/participant 检查与错误映射。
+- `imessage/`：固定 AppleScript、标准输入 JSON 传参、iMessage service/participant 检查与错误映射。
 - `network/`：ECM 接口、默认路由、VPN 存在性、接口 counters 和日/月聚合。
 - `storage/`：版本化 relay SQLite、原子偏好和 Keychain 目标。
 - `ui/`：菜单栏与设置窗口；不包含业务状态机。
