@@ -8,7 +8,7 @@
 
 从 [Windows 预览版发布页](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.2) 下载 `4G-Bridge-0.2.0-preview.2-windows-x64-setup.exe` 或便携 ZIP，并核对同页的 `windows-SHA256SUMS.txt`。尚未签名，可能出现 SmartScreen 提示，不应关闭系统安全保护。安装器安装到当前用户的应用目录，不安装驱动，不默认注册登录启动。更新前从托盘退出旧版；卸载保留设置及流量锁定记录，避免重新安装绕过保护。
 
-新版验证结果以发布页对应构建记录为准。Windows 工作流检查回归测试、浅深色百分比边界、六页布局、打包后启动、安装及卸载；这不代替 Windows 11 或 QDC507 实机验收。
+新版 [构建记录](https://github.com/pameda/4G-Bridge/actions/runs/36247144257) 对提交 `1815096` 通过 45 项 Windows 回归，以及源码、打包后、安装后三轮各 18 组浅深色百分比边界检查、六页布局、托盘启动与安装卸载检查；下载后 SHA-256 一致。详见 [本版测试说明](docs/windows-preview-2-release.md)。这不代替 Windows 11 或 QDC507 实机验收。
 
 1. 安装并启动，接入 QDC507，关闭其他占用模块的控制软件。
 2. 先查看“设备”页，确认系统网卡与 AT 串口已就绪。只匹配 `2CA3:4006` / `2C7C:0125`；没有兼容网卡或有多个模块时不猜测控制目标。
