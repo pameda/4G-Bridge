@@ -13,6 +13,23 @@ class StatusItemStyle:
     description: str
 
 
+@dataclass(frozen=True, slots=True)
+class BadgePalette:
+    foreground: tuple[float, float, float]
+    background: tuple[float, float, float]
+
+
+def badge_palette(style: StatusItemStyle, *, dark: bool) -> BadgePalette:
+    """Opaque paired colors keep the small label readable over any wallpaper."""
+    if style.symbol == "exclamationmark.triangle":
+        return BadgePalette((1, 1, 1), (0.53, 0.31, 0.02))
+    if style.secondary:
+        if dark:
+            return BadgePalette((0.66, 0.82, 0.99), (0.14, 0.23, 0.34))
+        return BadgePalette((0.24, 0.40, 0.60), (0.90, 0.94, 0.99))
+    return BadgePalette((1, 1, 1), (0.10, 0.40, 0.78) if dark else (0.08, 0.37, 0.75))
+
+
 def status_item_style(snapshot: ModemSnapshot) -> StatusItemStyle:
     if snapshot.data_state == DataState.PROTECTION_FAILED:
         return StatusItemStyle("exclamationmark.triangle", 1, False, "数据保护失败，请检查模块")

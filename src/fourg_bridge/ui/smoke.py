@@ -20,6 +20,7 @@ from fourg_bridge.models import (
 )
 from fourg_bridge.network.traffic import TrafficUsage
 from fourg_bridge.storage.settings import Settings
+from fourg_bridge.ui.badge_preview import render_badge_preview
 from fourg_bridge.ui.menu_bar import MenuBarController
 from fourg_bridge.ui.settings_window import SettingsWindowController
 
@@ -88,6 +89,8 @@ def run(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     application = AppKit.NSApplication.sharedApplication()
     application.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    render_badge_preview(output / "menu-badge-preview.png")
+    render_badge_preview(output / "menu-badge-preview-1x.png", scale=1)
     delegate = PreviewDelegate()
     menu = MenuBarController.alloc().initWithDelegate_(delegate)
     window = SettingsWindowController.alloc().initWithDelegate_(delegate)
@@ -116,10 +119,12 @@ def run(output: Path) -> None:
         button.setAppearance_(AppKit.NSAppearance.appearanceNamed_(appearance))
         for state in DataState:
             menu.update_(replace(delegate.snapshot, data_state=state))
-            assert menu._status_item.length() == 52
-            assert button.image().isTemplate()
-            assert button.title() == "4G"
-            assert button.image().size().width == 18
+            assert menu._status_item.length() == 50
+            assert not button.image().isTemplate()
+            assert button.image().cacheMode() == AppKit.NSImageCacheNever
+            assert button.title() == ""
+            assert button.image().size().width == 42
+            assert "4G Bridge" in button.accessibilityLabel()
             assert button.isEnabled()  # Dimmed icon remains clickable.
             bitmap = button.bitmapImageRepForCachingDisplayInRect_(button.bounds())
             button.cacheDisplayInRect_toBitmapImageRep_(button.bounds(), bitmap)

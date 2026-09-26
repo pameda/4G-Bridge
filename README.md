@@ -23,7 +23,7 @@
 
 ## 安装
 
-1. 打开 `artifacts/4G-Bridge-0.1.5-arm64.dmg`。
+1. 打开 `artifacts/4G-Bridge-0.1.6-arm64.dmg`。
 2. 将 4G Bridge 拖到“应用程序”。
 3. 首次启动若 Gatekeeper 提示，在“系统设置 → 隐私与安全性”中确认打开。
 4. 在设置中填写含国家区号的手机号（中国大陆为 `+86`）或 iMessage 邮箱，保存到 macOS 钥匙串；不会自动猜测国家区号。
