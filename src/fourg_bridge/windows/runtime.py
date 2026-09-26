@@ -35,6 +35,17 @@ class UIEvent:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class QueryRequest:
+    number: str
+    code: str
+    sim_key: str
+    created: float
+
+    def valid(self, sim_key: str, now: float) -> bool:
+        return self.sim_key == sim_key and bool(sim_key) and 0 <= now - self.created <= 60
+
+
 class Runtime:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
@@ -44,7 +55,8 @@ class Runtime:
         self.metric = MetricLease(directory / "metric-lease.json")
         self.events: queue.Queue[UIEvent] = queue.Queue()
         self.commands: queue.Queue[str] = queue.Queue(maxsize=16)
-        self.sms_commands: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=1)
+        self.sms_commands: queue.Queue[QueryRequest] = queue.Queue(maxsize=1)
+        self._query_pending = threading.Event()
         self.log = EventLog()
         self.log.add("start")
         self.inventory = platform.Inventory()
@@ -52,6 +64,7 @@ class Runtime:
         self.status = "正在检测设备…"
         self.modem_status = "等待 AT 串口"
         self.data_on = False
+        self._manual_connection = False
         self.sim_verified = False
         self._sim_key = ""
         self.protection_failed = False
@@ -102,8 +115,15 @@ class Runtime:
         from fourg_bridge.cellular.carrier_query import query_pdu
 
         query_pdu(number, code)
+        if not self.sim_verified:
+            raise platform.PlatformError("SIM 或 AT 通道尚未验证，未发送查询")
+        if self._query_pending.is_set():
+            raise platform.PlatformError("查询进行中，请等待回复，不重复发送")
+        self._query_pending.set()
         try:
-            self.sms_commands.put_nowait((number, code))
+            self.sms_commands.put_nowait(
+                QueryRequest(number, code, self._sim_key, time.monotonic())
+            )
         except queue.Full as exc:
             raise platform.PlatformError("已有查询等待执行，不重复发送") from exc
 
@@ -116,6 +136,7 @@ class Runtime:
             adapter = self._adapter
             if adapter is None:
                 self.data_on = False
+                self._manual_connection = False
                 return not enabled
             if enabled and (
                 self._closing.is_set()
@@ -128,6 +149,8 @@ class Runtime:
                 return False
             if not enabled and not adapter.enabled and not self.metric.path.exists():
                 self.data_on = False
+                self._manual_connection = False
+                self.protection_failed = False
                 self.budget.approved = False
                 return True
             if not native.is_admin():
@@ -150,6 +173,7 @@ class Runtime:
                         if actual:
                             self.metric.restore(adapter.guid)
                         self.data_on = False
+                        self._manual_connection = False
                         self.protection_failed = False
                         self.budget.approved = False
                         self.log.add("data_off")
@@ -221,6 +245,7 @@ class Runtime:
                     if command == "on":
                         self.policy.failover.paused = False
                         ok = self._change(True)
+                        self._manual_connection = ok
                         self.policy.failover.completed(Action.ENABLE, ok)
                     else:
                         if command == "off":
@@ -238,7 +263,7 @@ class Runtime:
                     self.wifi_online = any(platform.wifi_probe(item) for item in wifi)
                     decision = self.policy.decide(
                         snapshot,
-                        authorized=self.preferences.auto_takeover
+                        authorized=(self.preferences.auto_takeover or self._manual_connection)
                         and native.is_admin()
                         and self.sim_verified
                         and not self._suspended.is_set()
@@ -346,12 +371,15 @@ class Runtime:
                 if transport:
                     self._read_modem(transport)
                     if not self.sms_commands.empty():
-                        number, code = self.sms_commands.get_nowait()
-                        if self.sim_verified:
+                        request = self.sms_commands.get_nowait()
+                        if self.sim_verified and request.valid(self._sim_key, time.monotonic()):
                             self.log.add("query")
-                            result = send_query(transport, number, code, confirmed=True)
+                            result = send_query(
+                                transport, request.number, request.code, confirmed=True
+                            )
                         else:
-                            result = "SIM 身份未验证，未发送查询"
+                            result = "SIM 已变化或确认已过期，未发送查询"
+                        self._query_pending.clear()
                         self.log.add("query_end")
                         self.events.put(UIEvent("query_result", result))
                     # Read SMS only to extract carrier numbers. Never forward or delete.
@@ -374,9 +402,17 @@ class Runtime:
                     # Never leave a chargeable SMS queued to send unexpectedly on reconnect.
                     if not self.sms_commands.empty():
                         self.sms_commands.get_nowait()
+                        self._query_pending.clear()
                         self.events.put(UIEvent("query_result", "AT 串口未就绪，未发送查询"))
             except Exception:
                 self.sim_verified = False
+                if self._query_pending.is_set():
+                    while not self.sms_commands.empty():
+                        self.sms_commands.get_nowait()
+                    self._query_pending.clear()
+                    self.events.put(
+                        UIEvent("query_result", "查询中断，发送结果可能不确定；不会自动重发")
+                    )
                 self.modem_status = "AT 通信中断，将重新检测；不会自动重发查询"
                 if transport:
                     transport.close()
@@ -396,7 +432,11 @@ class Runtime:
             responses[command] = response.lines if response.ok else ()
         _, rssi = parse_csq(responses["AT+CSQ"])
         registration = parse_registration(responses["AT+CEREG?"])
-        sim = "就绪" if any("READY" in line for line in responses["AT+CPIN?"]) else "未就绪"
+        sim = (
+            "就绪"
+            if any(line.strip() == "+CPIN: READY" for line in responses["AT+CPIN?"])
+            else "未就绪"
+        )
         identifiers = re.findall(r"\b[0-9]{18,22}\b", " ".join(responses["AT+QCCID"]))
         verified = sim == "就绪" and len(identifiers) == 1
         if verified:

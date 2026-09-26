@@ -2,6 +2,7 @@
 
 import ctypes
 import json
+import socket
 import tempfile
 import unittest
 from dataclasses import replace
@@ -27,7 +28,8 @@ from fourg_bridge.windows.platform import (
     wifi_probe,
 )
 from fourg_bridge.windows.policy import ControllerPolicy
-from fourg_bridge.windows.runtime import Runtime
+from fourg_bridge.windows.probe import BoundHTTPS, online
+from fourg_bridge.windows.runtime import QueryRequest, Runtime
 from fourg_bridge.windows.settings import Preferences
 
 GUID = "00000000-0000-4000-8000-000000000001"
@@ -262,6 +264,44 @@ class StoreTests(unittest.TestCase):
             parse_usage("not-a-carrier", "总量1GB已用0GB", datetime.now().astimezone())
         )
 
+    def test_query_expiry_and_sim_change(self):
+        request = QueryRequest("10001", "108", "synthetic-hash", 100)
+        self.assertTrue(request.valid("synthetic-hash", 110))
+        self.assertFalse(request.valid("other-sim", 110))
+        self.assertFalse(request.valid("synthetic-hash", 161))
+
+    def test_unready_sim_rejects_query(self):
+        with self.assertRaises(PlatformError):
+            Runtime(self.path).query("10001", "108")
+
+    def test_duplicate_query_rejected(self):
+        runtime = Runtime(self.path)
+        runtime.sim_verified, runtime._sim_key = True, "synthetic-hash"
+        runtime.query("10001", "108")
+        with self.assertRaises(PlatformError):
+            runtime.query("10001", "108")
+        self.assertEqual(runtime.sms_commands.qsize(), 1)
+
+    def test_sleep_revokes_consent(self):
+        runtime = Runtime(self.path)
+        runtime.budget.approved = True
+        runtime.command("sleep")
+        self.assertFalse(runtime.budget.approved)
+        self.assertTrue(runtime._suspended.is_set())
+
+    @patch("fourg_bridge.windows.runtime.platform.inventory", side_effect=OSError)
+    @patch("fourg_bridge.windows.runtime.platform.change_adapter")
+    @patch("fourg_bridge.windows.runtime.native.is_admin", return_value=True)
+    @patch("fourg_bridge.windows.runtime.native.interface_counters", return_value=(0, 0))
+    @patch("fourg_bridge.windows.runtime.MetricLease")
+    def test_enable_exception_attempts_rollback(self, lease, counters, admin, change, scan):
+        runtime = Runtime(self.path)
+        runtime._adapter, runtime.sim_verified = MODEM, True
+        runtime.budget.update_plan(CarrierUsage(10000, 0, datetime.now().astimezone()))
+        self.assertFalse(runtime._change(True))
+        self.assertEqual([call.args[1] for call in change.call_args_list], [True, False])
+        self.assertTrue(runtime.protection_failed)
+
     def test_runtime_no_threads_or_actions_on_construct(self):
         runtime = Runtime(self.path)
         self.assertFalse(runtime.data_on)
@@ -319,6 +359,30 @@ class TrafficTests(unittest.TestCase):
         tracker.sample([(b"a", "App", 100, 100)], 1)
         tracker.sample([], 2)
         self.assertEqual(tracker.sample([(b"a", "App", 1000, 1000)], 3)[0].total, 0)
+
+
+class ProbeTests(unittest.TestCase):
+    @patch(
+        "fourg_bridge.windows.probe.socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 443))],
+    )
+    @patch("fourg_bridge.windows.probe.socket.socket")
+    def test_interface_is_bound_before_connect(self, factory, resolve):
+        conn = BoundHTTPS("example.invalid", 12, "192.0.2.2")
+        with patch.object(conn.tls_context, "wrap_socket"):
+            conn.connect()
+        raw = factory.return_value
+        raw.setsockopt.assert_called_with(socket.IPPROTO_IP, 31, socket.htonl(12))
+        raw.bind.assert_called_with(("192.0.2.2", 0))
+        names = [call[0] for call in raw.method_calls]
+        self.assertLess(names.index("setsockopt"), names.index("connect"))
+
+    @patch("fourg_bridge.windows.probe.BoundHTTPS")
+    def test_captive_portal_not_success(self, factory):
+        response = factory.return_value.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b"Login to Wi-Fi"
+        self.assertFalse(online(1, "192.0.2.2"))
 
 
 if __name__ == "__main__":

@@ -227,30 +227,6 @@ def wifi_probe(adapter: Adapter) -> bool:
     if not adapter.wifi or not adapter.usable:
         return False
     ipaddress.IPv4Address(adapter.ipv4)
-    try:
-        result = subprocess.run(
-            [
-                system_exe("curl.exe"),
-                "-q",
-                "--silent",
-                "--fail",
-                "--noproxy",
-                "*",
-                "--ipv4",
-                "--interface",
-                adapter.ipv4,
-                "--connect-timeout",
-                "2",
-                "--max-time",
-                "3",
-                "--max-filesize",
-                "4096",
-                "https://www.msftconnecttest.com/connecttest.txt",
-            ],
-            capture_output=True,
-            timeout=4,
-            creationflags=0x08000000,
-        )
-        return result.returncode == 0 and result.stdout.strip() == b"Microsoft Connect Test"
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    from fourg_bridge.windows.probe import online
+
+    return online(adapter.index, adapter.ipv4)

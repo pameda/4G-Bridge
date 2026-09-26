@@ -1,5 +1,15 @@
 # 4G Bridge 架构
 
+## Windows 预览版平台边界
+
+`windows/` 为独立入口，不导入 macOS AppKit／Messages UI。`native.py` 封装系统 COM 和 GetIfEntry2；`platform.py` 以固定 PowerShell 脚本做设备发现和 GUID＋VID/PID 双重核验的网卡操作。`metric.py` 保存模块 IPv4 metric 租约，在关闭及下次启动恢复，绝不覆盖无关接口。
+
+`runtime.py` 分离网卡发现、AT／运营商短信和约一秒流量守卫线程。`policy.py` 是可测试的自动接管规则；`probe.py` 用 Windows IP_UNICAST_IF 将 TLS 探测绑定 Wi-Fi 出口，不仅绑定源地址。`ui.py` 仅在 Tk 主线程更新，后台通过队列交付；`tray.py` 处理系统托盘和电源事件。`settings.py` 保存非敏感偏好及当前用户登录项，数据开启与 80% 授权不持久化。
+
+复用 `modem/at_transport.py`、`sms/` 解码与组装、`cellular/carrier_query.py`、`storage/carrier_budget.py`、流量账本和安全日志。Windows 只提取运营商数值，不调用 SMS 删除或转发；SIM ICCID 仅在内存中生成哈希后关联独立账本，不持久化原文。查询绑定确认时的 SIM 哈希且 60 秒后失效，不在断线恢复后意外发送。
+
+Windows Python 运行部分没有新增第三方依赖。Tk/ttk 控件来自官方 Python 的 Tcl-Tk；打包工具另设固定版本、哈希及人工授权步骤，不影响 macOS 依赖锁或已安装应用。
+
 ## V1.2 界面分层
 
 `ui/components.py` 提供原生布局、语义色、SF Symbols 和速度图；`ui/status_panel.py` 是菜单栏快速面板；`ui/settings_window.py` 组织总览、流量、短信转发、设备和设置。无副作用的展示规则与短期内存采样位于 `support/presentation.py`，可独立测试。ApplicationController 在主线程发布已采集的数据；视图不会直接探测设备、读取短信或更改网络。
