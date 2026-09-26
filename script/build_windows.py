@@ -69,7 +69,17 @@ def notices(target: Path) -> None:
         python_root / f"tcl/tk{tkinter.TkVersion}/license.terms",
     ):
         if not source.is_file():
-            raise RuntimeError(f"Missing runtime license: {source}")
+            # CPython's Windows installer does not ship these upstream files.
+            # Use the matching reviewed release text, never silently omit notices.
+            patch_level = str(tkinter.Tcl().eval("info patchlevel"))
+            component = "tcl" if source.parent.name.startswith("tcl") else "tk"
+            fallback = (
+                ROOT / "resources/windows-licenses" / f"{component}-{patch_level}-license.terms"
+            )
+            if source.name != "license.terms" or not fallback.is_file():
+                raise RuntimeError(f"Missing runtime license: {source}")
+            shutil.copy2(fallback, target / fallback.name)
+            continue
         shutil.copy2(source, target / (source.parent.name + "-" + source.name))
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", target)
 
