@@ -6,6 +6,7 @@
 - 首次 Windows CI 配置有 YAML 参数冒号转义问题，修复后 [Windows run 36228410419](https://github.com/pameda/4G-Bridge/actions/runs/36228410419) 通过：当时的 34 项 Windows 测试、Win32 结构尺寸、系统网卡枚举、2 个接口计数读取、960×730 六页 Tk/ttk 启动检查。
 - 源码 smoke 尚未携带打包图标，托盘验证记录为 false；不能把窗口启动当成托盘已验证。打包 EXE、托盘图标、安装／卸载另设验证步骤，等待第三方构建工具授权后执行。
 - 后续新增探测接口绑定、查询确认过期／换卡取消、并发查询拒绝、睡眠撤销授权、开启失败回滚测试；不得用逻辑 mock 测试代替硬件验收。
+- 最终源码 `454f20b` 的 [Windows run 36228792202](https://github.com/pameda/4G-Bridge/actions/runs/36228792202) 再次通过：41 项 Windows 回归、只读系统接口检查和六页源码 UI 启动；第三方依赖安装、EXE 打包与安装验收步骤按未授权状态跳过。
 - 没有安装新构建依赖到用户 Mac，没有发送查询短信，没有启停用户网络，没有运行 iMessage。Windows runner 无 QDC507，SIM／AT／上网／VPN／睡眠唤醒硬件测试均为 **未执行**。
 
 
