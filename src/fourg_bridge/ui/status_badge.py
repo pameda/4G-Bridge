@@ -27,37 +27,24 @@ def make_status_badge(style: StatusItemStyle):
         foreground.setFill()
         foreground.setStroke()
 
-        if style.symbol == "cellularbars" and not style.secondary:
-            for index, height in enumerate((3, 5, 7, 10)):
-                foreground.colorWithAlphaComponent_(
-                    1 if index < style.level * 4 else 0.30
-                ).setFill()
-                AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                    ((4 + index * 3, 4), (2, height)), 1, 1
-                ).fill()
-        elif style.symbol == "cable.connector":
-            ring = AppKit.NSBezierPath.bezierPathWithOvalInRect_(((5, 5), (8, 8)))
-            ring.setLineWidth_(1.3)
-            ring.stroke()
-            slash = AppKit.NSBezierPath.bezierPath()
-            slash.moveToPoint_((5.5, 5.5))
-            slash.lineToPoint_((12.5, 12.5))
-            slash.setLineWidth_(1.3)
-            slash.stroke()
-        elif style.symbol == "exclamationmark.triangle":
-            AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                ((8, 8), (2, 6)), 1, 1
-            ).fill()
-            AppKit.NSBezierPath.bezierPathWithOvalInRect_(((8, 4), (2, 2))).fill()
-        elif style.symbol == "arrow.triangle.2.circlepath":
-            for x in (6, 11):
-                AppKit.NSBezierPath.bezierPathWithOvalInRect_(((x, 8), (2.5, 2.5))).fill()
-        else:
-            # Paused bars distinguish data OFF from a merely weak active signal.
-            for x in (6, 11):
-                AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                    ((x, 5), (2, 8)), 1, 1
-                ).fill()
+        # Use Apple's optical sizing and variable signal symbol instead of hand-drawn glyphs.
+        name = "pause.fill" if style.symbol == "cellularbars" and style.secondary else style.symbol
+        glyph = AppKit.NSImage.imageWithSystemSymbolName_variableValue_accessibilityDescription_(
+            name, style.level, style.description
+        )
+        configuration = AppKit.NSImageSymbolConfiguration.configurationWithPaletteColors_(
+            [foreground]
+        )
+        glyph = glyph.imageWithSymbolConfiguration_(configuration)
+        size = glyph.size()
+        scale = min(12 / size.width, 12 / size.height)
+        width, height = size.width * scale, size.height * scale
+        glyph.drawInRect_fromRect_operation_fraction_(
+            ((4 + (12 - width) / 2, (18 - height) / 2), (width, height)),
+            AppKit.NSZeroRect,
+            AppKit.NSCompositingOperationSourceOver,
+            1,
+        )
         attributes = {
             AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_weight_(
                 11, AppKit.NSFontWeightSemibold

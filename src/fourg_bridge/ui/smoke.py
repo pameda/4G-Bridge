@@ -24,6 +24,7 @@ from fourg_bridge.network.traffic import TrafficUsage
 from fourg_bridge.storage.settings import Settings
 from fourg_bridge.ui.badge_preview import render_badge_preview
 from fourg_bridge.ui.menu_bar import MenuBarController
+from fourg_bridge.ui.navigation import DESTINATIONS
 from fourg_bridge.ui.settings_window import SettingsWindowController
 
 
@@ -75,7 +76,7 @@ class PreviewDelegate:
         pass
 
     def data_policy(self):
-        return Settings(), 0, "自动接管未开启；请先设置有限额度。"
+        return Settings(carrier_policy_enabled=True), 0, "套餐保护已开启 · 自动接管未开启"
 
     def relay_target(self):
         return None
@@ -121,6 +122,7 @@ def run(output: Path) -> None:
     delegate = PreviewDelegate()
     menu = MenuBarController.alloc().initWithDelegate_(delegate)
     window = SettingsWindowController.alloc().initWithDelegate_(delegate)
+    window._sidebar.footnote.setStringValue_("界面验证 · 模拟数据，非实机状态")
     window.refresh()
     window.showWindow_(None)
     menu.update_(delegate.current_snapshot())
@@ -161,6 +163,7 @@ def run(output: Path) -> None:
         menu.update_(delegate.snapshot)
         for index in range(8):
             window._tabs.setSelectedTabViewItemIndex_(index)
+            assert DESTINATIONS[window._sidebar.table.selectedRow()][0] == index
             Foundation.NSRunLoop.currentRunLoop().runUntilDate_(
                 Foundation.NSDate.dateWithTimeIntervalSinceNow_(0.15)
             )
@@ -170,6 +173,31 @@ def run(output: Path) -> None:
             content.cacheDisplayInRect_toBitmapImageRep_(content.bounds(), bitmap)
             data = bitmap.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
             data.writeToFile_atomically_(str(output / f"{appearance}-{index}.png"), True)
+    # Verify keyboard/table navigation and constrained resizing without invoking live actions.
+    for row, (index, _title, _icon) in enumerate(DESTINATIONS):
+        window._sidebar.table.selectRowIndexes_byExtendingSelection_(
+            Foundation.NSIndexSet.indexSetWithIndex_(row), False
+        )
+        assert window._tabs.selectedTabViewItemIndex() == index
+    for width, height in ((1000, 700), (1280, 820)):
+        window.window().setContentSize_(AppKit.NSMakeSize(width, height))
+        for index in range(8):
+            window._tabs.setSelectedTabViewItemIndex_(index)
+            window.window().contentView().layoutSubtreeIfNeeded()
+            scroll = window._tabs.tabViewItems()[index].viewController().view()
+            assert (
+                abs(
+                    scroll.documentView().frame().size.width
+                    - scroll.contentView().bounds().size.width
+                )
+                < 1
+            )
+            assert abs(window._tabs.view().frame().size.width - (width - 200)) < 1
+            assert (
+                scroll.documentView().frame().size.height
+                >= scroll.contentView().bounds().size.height - 1
+            )
+    window.window().setContentSize_(AppKit.NSMakeSize(1040, 760))
     # State and interaction checks run against an inert delegate: no hardware or messaging.
     window._target.setStringValue_("unsaved target")
     window.refresh(False)
@@ -224,5 +252,12 @@ def run(output: Path) -> None:
     assert menu._panel._ring.value.stringValue() == "20.0%"
     menu._panel._ring.update(None)
     assert menu._panel._ring.value.stringValue() == "—"
-    print("UI_SMOKE_OK: menu, eight pages, light/dark, states and safe interactions", flush=True)
+    assert window._overview_ring.value.stringValue() == "20.0%"
+    assert window._carrier_ring.value.stringValue() == "20.0%"
+    assert "60.0 GB" in window._budget_usage.stringValue()
+    assert not hasattr(window, "_data_limit")
+    print(
+        "UI_SMOKE_OK: sidebar, eight pages, light/dark, resizing, states and safe interactions",
+        flush=True,
+    )
     window.window().orderOut_(None)

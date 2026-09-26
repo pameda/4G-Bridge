@@ -1,6 +1,6 @@
 import stat
 
-from fourg_bridge.storage.settings import Settings, SettingsStore
+from fourg_bridge.storage.settings import Settings, SettingsStore, mac_carrier_policy
 
 
 def test_atomic_private_settings(tmp_path) -> None:
@@ -46,3 +46,26 @@ def test_invalid_relay_value_does_not_enable(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text('{"relay_enabled": "false"}')
     assert not SettingsStore(path).load().relay_enabled
+
+
+def test_mac_uses_carrier_plan_without_granting_data_consent():
+    settings = mac_carrier_policy(Settings())
+    assert settings.carrier_policy_enabled
+    assert not settings.auto_data_enabled
+    assert settings.data_limit_bytes == 0  # Never invent a carrier total.
+
+
+def test_legacy_cap_consent_does_not_expand_to_larger_carrier_plan():
+    legacy = Settings(
+        relay_enabled=False, appearance="dark", auto_data_enabled=True, data_limit_bytes=100
+    )
+    migrated = mac_carrier_policy(legacy)
+    assert migrated.carrier_policy_enabled and not migrated.auto_data_enabled
+    assert not migrated.relay_enabled and migrated.appearance == "dark"
+    assert migrated.data_limit_bytes == 100  # Retained for rollback, not actively applied.
+    assert mac_carrier_policy(migrated) == migrated
+
+
+def test_existing_carrier_authorization_survives_mac_ui_upgrade():
+    settings = Settings(carrier_policy_enabled=True, auto_data_enabled=True)
+    assert mac_carrier_policy(settings) is settings

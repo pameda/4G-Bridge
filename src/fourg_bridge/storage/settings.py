@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 
@@ -16,6 +16,17 @@ class Settings:
     data_limit_bytes: int = 0
     data_budget_period: str = "allowance"
     carrier_policy_enabled: bool = False
+
+
+def mac_carrier_policy(settings: Settings) -> Settings:
+    """Migrate the Mac UI to plan-based protection without granting new data consent.
+
+    Legacy GB budgets remain stored for rollback only. Their authorization does not
+    authorize spending up to a potentially larger carrier plan.
+    """
+    if settings.carrier_policy_enabled:
+        return settings
+    return replace(settings, carrier_policy_enabled=True, auto_data_enabled=False)
 
 
 class SettingsStore:

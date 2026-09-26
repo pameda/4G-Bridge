@@ -33,7 +33,7 @@ from fourg_bridge.network.traffic import TrafficLedger
 from fourg_bridge.storage.budget import BudgetStore
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
-from fourg_bridge.storage.settings import SettingsStore
+from fourg_bridge.storage.settings import SettingsStore, mac_carrier_policy
 from fourg_bridge.support.event_log import EventLog
 from fourg_bridge.support.privacy import redact_identifier
 from fourg_bridge.ui.menu_bar import MenuBarController
@@ -49,7 +49,7 @@ class ApplicationController:
         self._relay_wait_logged = False
         support = Path.home() / "Library" / "Application Support" / "4G Bridge"
         self._settings_store = SettingsStore(support / "settings.json")
-        self._settings = self._settings_store.load()
+        self._settings = mac_carrier_policy(self._settings_store.load())
         self._apply_appearance()
         self._keychain = KeychainStore()
         self._database = RelayDatabase(support / "relay.sqlite")
@@ -231,13 +231,13 @@ class ApplicationController:
             return
         self._auto_data.carrier_budget.update_plan(usage)
         alert = AppKit.NSAlert.alloc().init()
-        alert.setMessageText_("启用 80% / 98% 套餐保护？")
+        alert.setMessageText_("允许按套餐上限自动接管？")
         alert.setInformativeText_(
             "Wi-Fi 断开或无互联网时自动请求 4G 接管；80% 前不限速，80% 起需确认，98% 自动关闭。\n"
             "使用运营商快照＋本机新增流量估算，不是实时账单。查询超过 6 小时会暂停，需手动查询；"
             "不会后台发送收费短信。不会关闭 VPN；VPN 自身仍需支持网络切换。"
         )
-        alert.addButtonWithTitle_("启用保护与自动接管")
+        alert.addButtonWithTitle_("允许自动接管")
         alert.addButtonWithTitle_("取消")
         if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
             return

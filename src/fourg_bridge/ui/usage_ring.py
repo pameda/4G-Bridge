@@ -10,6 +10,8 @@ class UsageRing(AppKit.NSView):
         if self is None:
             return None
         self.fraction = None
+        self.setAccessibilityElement_(True)
+        self.setAccessibilityRole_(AppKit.NSAccessibilityImageRole)
         self.value = AppKit.NSTextField.labelWithString_("—")
         self.value.setAlignment_(AppKit.NSTextAlignmentCenter)
         self.value.setFont_(

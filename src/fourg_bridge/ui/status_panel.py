@@ -8,7 +8,16 @@ import objc
 from fourg_bridge.models import DataState
 from fourg_bridge.support.presentation import connection_title, format_bytes, operator_name
 from fourg_bridge.ui.app_network import AppNetworkTable
-from fourg_bridge.ui.components import group, label, pin, section_title, stack, symbol
+from fourg_bridge.ui.components import (
+    PageBackground,
+    group,
+    label,
+    pin,
+    section_title,
+    spread,
+    stack,
+    symbol,
+)
 from fourg_bridge.ui.usage_ring import UsageRing
 
 
@@ -23,21 +32,21 @@ class StatusPanelController(AppKit.NSViewController):
         if self is None:
             return None
         self._delegate = delegate
-        view = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 380, 740))
+        view = PageBackground.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 400, 700))
         self.setView_(view)
-        self._title = label("连接你的 4G 模块", 19, weight=AppKit.NSFontWeightSemibold)
+        self._title = label("连接你的 4G 模块", 18, weight=AppKit.NSFontWeightSemibold)
         self._subtitle = label("接入模块后自动检测", 12, True)
         self._data = AppKit.NSButton.buttonWithTitle_target_action_(
             "开启 4G 数据…", self, "toggleData:"
         )
         self._warning = label("Wi-Fi 优先 · 数据默认关闭", 11, True)
-        self._today = label("—", 25, numeric=True, weight=AppKit.NSFontWeightSemibold)
-        self._speed = label("↓ —    ↑ —", 12, True, numeric=True)
+        self._today = label("今日 —", 11, True, numeric=True)
+        self._speed = label("↓ —    ↑ —", 11, True, numeric=True)
         self._ring = UsageRing.alloc().init()
-        self._plan_used = label("已用 —", 13, numeric=True)
+        self._plan_used = label("已用 —", 16, numeric=True, weight=AppKit.NSFontWeightMedium)
         self._plan_total = label("总量 —", 12, True, numeric=True)
         self._plan_updated = label("等待运营商查询", 10, True)
-        self._relay = label("未开启", 13)
+        self._relay = label("未开启", 12, True)
         self._recent = label("本次运行暂无转发", 11, True)
         self._app_table = AppNetworkTable.alloc().initWithCompact_(True)
         self._app_status = label("打开后开始观测", 11, True)
@@ -51,7 +60,11 @@ class StatusPanelController(AppKit.NSViewController):
                     True,
                     10,
                 ),
-                group([self._title, self._subtitle, self._data, self._warning]),
+                group(
+                    [spread(self._title, self._data), self._subtitle, self._warning],
+                    accent=True,
+                    compact=True,
+                ),
                 group(
                     [
                         section_title("运营商套餐", "chart.pie"),
@@ -59,33 +72,44 @@ class StatusPanelController(AppKit.NSViewController):
                             [
                                 self._ring,
                                 stack(
-                                    [self._plan_used, self._plan_total, self._plan_updated],
+                                    [
+                                        self._plan_used,
+                                        self._plan_total,
+                                        self._plan_updated,
+                                        self._today,
+                                        self._speed,
+                                    ],
                                     spacing=5,
                                 ),
                             ],
                             True,
                             16,
                         ),
-                        self._today,
-                        self._speed,
-                    ]
+                    ],
+                    compact=True,
                 ),
-                group([section_title("iMessage 转发", "message"), self._relay, self._recent]),
+                group(
+                    [spread(section_title("iMessage 转发", "message"), self._relay), self._recent],
+                    compact=True,
+                ),
                 group(
                     [
-                        section_title("应用网络", "network"),
+                        spread(
+                            section_title("应用网络", "network"),
+                            AppKit.NSButton.buttonWithTitle_target_action_(
+                                "查看全部", self, "showAppNetwork:"
+                            ),
+                        ),
                         self._app_table.view,
                         self._app_status,
-                        AppKit.NSButton.buttonWithTitle_target_action_(
-                            "查看全部应用…", self, "showAppNetwork:"
-                        ),
-                    ]
+                    ],
+                    compact=True,
                 ),
                 AppKit.NSButton.buttonWithTitle_target_action_(
                     "打开连接总览…", self, "showOverview:"
                 ),
             ],
-            spacing=12,
+            spacing=10,
         )
         scroll = AppKit.NSScrollView.alloc().init()
         scroll.setDrawsBackground_(False)
@@ -98,7 +122,7 @@ class StatusPanelController(AppKit.NSViewController):
         document.widthAnchor().constraintEqualToAnchor_(
             scroll.contentView().widthAnchor()
         ).setActive_(True)
-        pin(content, document, 18)
+        pin(content, document, 14)
         for child in content.arrangedSubviews():
             child.widthAnchor().constraintEqualToAnchor_(content.widthAnchor()).setActive_(True)
         return self
@@ -144,7 +168,6 @@ class StatusPanelController(AppKit.NSViewController):
             )
         )
         sample, usage = self._delegate.traffic_state()
-        self._today.setFont_(AppKit.NSFont.systemFontOfSize_(12))
         self._today.setStringValue_("本机今日 " + format_bytes(usage.today_rx + usage.today_tx))
         self._speed.setStringValue_(
             f"↓ {format_bytes(sample.download_bps)}/s    ↑ {format_bytes(sample.upload_bps)}/s"

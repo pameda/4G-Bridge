@@ -25,7 +25,7 @@ class MenuBarController(AppKit.NSObject):
         self._popover = AppKit.NSPopover.alloc().init()
         self._popover.setContentViewController_(self._panel)
         self._popover.setBehavior_(AppKit.NSPopoverBehaviorTransient)
-        self._popover.setContentSize_(AppKit.NSMakeSize(380, 740))
+        self._popover.setContentSize_(AppKit.NSMakeSize(400, 700))
         self._panel._popover = self._popover
         button = self._status_item.button()
         button.setTitle_("")

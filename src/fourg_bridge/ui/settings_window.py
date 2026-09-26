@@ -19,19 +19,23 @@ from fourg_bridge.ui.components import (
     group,
     label,
     page,
+    pin,
     section_title,
     stack,
     symbol,
 )
+from fourg_bridge.ui.navigation import NavigationTabs, Sidebar
+from fourg_bridge.ui.usage_ring import UsageRing
 
 
 class SettingsWindowController(AppKit.NSWindowController):
     def initWithDelegate_(self, delegate):
         window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            AppKit.NSMakeRect(0, 0, 820, 670),
+            AppKit.NSMakeRect(0, 0, 1040, 760),
             AppKit.NSWindowStyleMaskTitled
             | AppKit.NSWindowStyleMaskClosable
-            | AppKit.NSWindowStyleMaskMiniaturizable,
+            | AppKit.NSWindowStyleMaskMiniaturizable
+            | AppKit.NSWindowStyleMaskResizable,
             AppKit.NSBackingStoreBuffered,
             False,
         )
@@ -45,8 +49,9 @@ class SettingsWindowController(AppKit.NSWindowController):
         window.setTitle_("4G Bridge")
         window.setReleasedWhenClosed_(False)
         window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
-        self._tabs = AppKit.NSTabViewController.alloc().init()
-        self._tabs.setTabStyle_(AppKit.NSTabViewControllerTabStyleToolbar)
+        self._tabs = NavigationTabs.alloc().init()
+        self._tabs.setTabStyle_(AppKit.NSTabViewControllerTabStyleUnspecified)
+        self._tabs.tabView().setTabViewType_(AppKit.NSNoTabsNoBorder)
         self._tabs.setTransitionOptions_(0)
         for title, icon, view in (
             ("总览", "square.grid.2x2", self._overview_page()),
@@ -67,9 +72,23 @@ class SettingsWindowController(AppKit.NSWindowController):
                 AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(icon, title)
             )
             self._tabs.addTabViewItem_(item)
-        window.setContentViewController_(self._tabs)
-        window.setToolbarStyle_(AppKit.NSWindowToolbarStylePreference)
-        window.setContentSize_(AppKit.NSMakeSize(820, 650))
+        self._sidebar = Sidebar.alloc().initWithTabs_(self._tabs)
+        self._tabs.sidebar = self._sidebar
+        root = AppKit.NSViewController.alloc().init()
+        root.setView_(AppKit.NSView.alloc().init())
+        root.addChildViewController_(self._tabs)
+        body = stack([self._sidebar.view, self._tabs.view()], True, 0)
+        body.setAlignment_(AppKit.NSLayoutAttributeTop)
+        pin(body, root.view(), 0)
+        self._sidebar.view.widthAnchor().constraintEqualToConstant_(200).setActive_(True)
+        self._tabs.view().widthAnchor().constraintEqualToAnchor_constant_(
+            body.widthAnchor(), -200
+        ).setActive_(True)
+        for child in body.arrangedSubviews():
+            child.heightAnchor().constraintEqualToAnchor_(body.heightAnchor()).setActive_(True)
+        window.setContentViewController_(root)
+        window.setContentMinSize_(AppKit.NSMakeSize(1000, 700))
+        window.setContentSize_(AppKit.NSMakeSize(1040, 760))
         window.center()
         return self
 
@@ -79,7 +98,7 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def _metric(self, key, title, icon, note):
-        value = label("—", 27, weight=AppKit.NSFontWeightSemibold, numeric=True)
+        value = label("—", 28, weight=AppKit.NSFontWeightMedium, numeric=True)
         self._metrics[key] = value
         return group([section_title(title, icon), value, label(note, 11, True)])
 
@@ -97,7 +116,7 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def _overview_page(self):
-        self._connection = label("连接你的 4G 模块", 23, weight=AppKit.NSFontWeightSemibold)
+        self._connection = label("连接你的 4G 模块", 24, weight=AppKit.NSFontWeightSemibold)
         self._connection_detail = label("接入 QDC507 后，即可查看蜂窝网络状态。", 13, True)
         self._network_status = label("数据默认关闭，仅在你主动开启后使用 SIM 流量。", 12, True)
         self._data_button = self._button("开启 4G 数据…", "toggleData:")
@@ -116,8 +135,12 @@ class SettingsWindowController(AppKit.NSWindowController):
                 ),
                 stack([self._data_button, self._rescan, label("Wi-Fi 优先", 12, True)], True),
                 self._network_status,
-            ]
+            ],
+            accent=True,
         )
+        self._overview_ring = UsageRing.alloc().init()
+        self._overview_plan = label("尚未查询套餐", 15, weight=AppKit.NSFontWeightMedium)
+        self._overview_plan_note = label("查询后显示运营商用量", 11, True)
         self._overview_relay = label("未开启", 18, weight=AppKit.NSFontWeightMedium)
         self._recent = label("尚无转发记录", 12, True)
         self._route = label("尚未取得系统默认接口", 12, True)
@@ -125,7 +148,28 @@ class SettingsWindowController(AppKit.NSWindowController):
             "连接总览",
             "蜂窝连接与短信转发，一目了然。",
             [
-                hero,
+                columns(
+                    [
+                        hero,
+                        group(
+                            [
+                                section_title("运营商套餐", "simcard"),
+                                stack(
+                                    [
+                                        self._overview_ring,
+                                        stack(
+                                            [self._overview_plan, self._overview_plan_note],
+                                            spacing=8,
+                                        ),
+                                    ],
+                                    True,
+                                    12,
+                                ),
+                                self._button("查看套餐与保护策略", "showCarrier:"),
+                            ]
+                        ),
+                    ]
+                ),
                 columns(
                     [
                         self._metric("today", "今日流量", "chart.bar", "本机累计 · 下载 + 上传"),
@@ -432,7 +476,7 @@ class SettingsWindowController(AppKit.NSWindowController):
             [
                 group(
                     [
-                        stack([section_title("APP NETWORK", "network"), self._app_pause], True),
+                        stack([section_title("实时应用用量", "network"), self._app_pause], True),
                         self._app_network_status,
                         self._app_table.view,
                         label(
@@ -460,6 +504,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._carrier_remaining = label("—", 30, weight=AppKit.NSFontWeightSemibold, numeric=True)
         self._carrier_updated = label("等待运营商短信回复", 12, True)
         self._carrier_policy = label("尚未启用套餐保护", 12, True)
+        self._carrier_ring = UsageRing.alloc().init()
         return page(
             "运营商流量",
             "套餐余量与本机计数，分开查看。",
@@ -467,8 +512,14 @@ class SettingsWindowController(AppKit.NSWindowController):
                 group(
                     [
                         section_title("剩余流量 · 短信识别", "simcard"),
-                        self._carrier_remaining,
-                        self._carrier_updated,
+                        stack(
+                            [
+                                self._carrier_ring,
+                                stack([self._carrier_remaining, self._carrier_updated], spacing=8),
+                            ],
+                            True,
+                            24,
+                        ),
                         self._carrier_policy,
                         self._button("启用／停用套餐自动接管…", "carrierPolicy:"),
                         label(
@@ -513,14 +564,12 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._login_status = label("读取系统登录项状态", 11, True)
         self._auto_enabled = AppKit.NSSwitch.alloc().init()
         self._auto_enabled.setAccessibilityLabel_("Wi-Fi 故障自动接管")
-        self._data_limit = AppKit.NSTextField.alloc().init()
-        self._data_limit.setPlaceholderString_("输入上限")
-        self._data_limit.setAccessibilityLabel_("4G 流量上限 GB")
-        self._data_limit.widthAnchor().constraintEqualToConstant_(110).setActive_(True)
-        self._budget_period = AppKit.NSPopUpButton.alloc().init()
-        self._budget_period.addItemsWithTitles_(["每份额度", "每自然月"])
+        self._auto_enabled.setTarget_(self)
+        self._auto_enabled.setAction_("carrierPolicy:")
         self._policy_status = label("自动接管未开启", 12, True)
-        self._budget_usage = label("尚未设置流量上限", 12, True)
+        self._budget_usage = label(
+            "4G 上限：等待运营商套餐总量", 15, weight=AppKit.NSFontWeightMedium
+        )
         self._appearance = (
             AppKit.NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
                 ["跟随系统", "浅色", "深色"],
@@ -543,26 +592,41 @@ class SettingsWindowController(AppKit.NSWindowController):
                             ],
                             True,
                         ),
-                        stack(
-                            [
-                                label("4G 上限", 12),
-                                self._data_limit,
-                                label("GB", 12, True),
-                                self._budget_period,
-                                self._button("保存策略…", "saveDataPolicy:"),
-                            ],
-                            True,
-                        ),
                         self._budget_usage,
                         self._policy_status,
+                        columns(
+                            [
+                                group(
+                                    [
+                                        label("低于 80%", 15, weight=AppKit.NSFontWeightSemibold),
+                                        label("正常使用", 12, True),
+                                    ],
+                                    compact=True,
+                                ),
+                                group(
+                                    [
+                                        label("达到 80%", 15, weight=AppKit.NSFontWeightSemibold),
+                                        label("提醒并确认", 12, True),
+                                    ],
+                                    compact=True,
+                                ),
+                                group(
+                                    [
+                                        label("达到 98%", 15, weight=AppKit.NSFontWeightSemibold),
+                                        label("自动关闭", 12, True),
+                                    ],
+                                    compact=True,
+                                ),
+                            ]
+                        ),
                         label(
-                            "Wi-Fi 明确断开时快速接管，互联网故障需连续确认；VPN 配置不变。\n"
-                            "到顶锁定，重启或跨月不会解锁。手动追加相同额度后才能继续。\n"
-                            "本机计量，非运营商账单；采样和断开存在延迟，可能超额。",
+                            "上限自动取自运营商套餐，不需要另填 GB 额度。Wi-Fi 可用时优先使用。\n"
+                            "未知套餐或查询超过 6 小时时暂停开启，请手动重新查询。\n"
+                            "按运营商回复＋本机新增流量估算，存在延迟，不是实时账单。",
                             11,
                             True,
                         ),
-                        self._button("手动追加一份额度…", "grantData:"),
+                        self._button("查看套餐与查询", "showCarrier:"),
                     ]
                 ),
                 group(
@@ -590,6 +654,22 @@ class SettingsWindowController(AppKit.NSWindowController):
     @objc.python_method
     def refresh(self, include_target=True):
         self.refresh_logs()
+        carrier_usage = self._delegate.carrier_usage()
+        self._overview_ring.update(carrier_usage)
+        self._carrier_ring.update(carrier_usage)
+        self._overview_plan.setStringValue_(
+            f"已用 {format_bytes(carrier_usage.used_bytes)} / "
+            f"{format_bytes(carrier_usage.total_bytes)}"
+            if carrier_usage
+            else "尚未查询套餐"
+        )
+        self._overview_plan_note.setStringValue_(
+            carrier_usage.basis
+            + " · "
+            + carrier_usage.timestamp.astimezone().strftime("%m-%d %H:%M 更新")
+            if carrier_usage
+            else "仅使用明确的运营商回复，不用本机计数推算套餐。"
+        )
         self._carrier_policy.setStringValue_(self._delegate.carrier_policy_status())
         login_state, login_text = self._delegate.login_status()
         self._login.setState_(int(login_state == 1))
@@ -608,20 +688,14 @@ class SettingsWindowController(AppKit.NSWindowController):
         self.refresh_app_network()
         diagnostic = getattr(self._delegate, "diagnostic_mode", False)
         self.window().setTitle_("4G Bridge · 短信测试模式" if diagnostic else "4G Bridge")
-        settings, used, policy_status = self._delegate.data_policy()
-        self._data_limit.setEnabled_(not settings.carrier_policy_enabled)
-        self._budget_period.setEnabled_(not settings.carrier_policy_enabled)
-        if include_target:
-            self._auto_enabled.setState_(int(settings.auto_data_enabled))
-            self._data_limit.setStringValue_(
-                f"{settings.data_limit_bytes / 1_000_000_000:g}"
-                if settings.data_limit_bytes
-                else ""
-            )
-            self._budget_period.selectItemAtIndex_(int(settings.data_budget_period == "month"))
+        settings, _used, policy_status = self._delegate.data_policy()
+        self._auto_enabled.setState_(int(settings.auto_data_enabled))
+        self._auto_enabled.setEnabled_(not diagnostic)
         self._policy_status.setStringValue_(policy_status)
         self._budget_usage.setStringValue_(
-            f"当前额度已用 {format_bytes(used)} / {format_bytes(settings.data_limit_bytes)}"
+            f"4G 上限：{format_bytes(carrier_usage.total_bytes)} · 运营商套餐总量"
+            if carrier_usage
+            else "4G 上限：等待运营商套餐总量"
         )
         self._enabled.setState_(int(self._delegate.relay_enabled()))
         self._enabled.setEnabled_(not getattr(self._delegate, "diagnostic_mode", False))
@@ -638,6 +712,9 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._test_button.setEnabled_(not busy)
         self._authorize_button.setEnabled_(not busy)
         snapshot = self._delegate.current_snapshot()
+        self._sidebar.status.setStringValue_(
+            "QDC507 · 已连接" if snapshot.descriptor else "QDC507 · 未连接"
+        )
         state = snapshot.data_state
         self._connection.setStringValue_(connection_title(snapshot))
         self._connection_detail.setStringValue_(
@@ -806,42 +883,14 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._tabs.setSelectedTabViewItemIndex_(2)
 
     @objc.IBAction
+    def showCarrier_(self, _sender):
+        self._tabs.setSelectedTabViewItemIndex_(6)
+
+    @objc.IBAction
     def appearanceChanged_(self, _sender):
         self._delegate.set_appearance(
             ("system", "light", "dark")[self._appearance.selectedSegment()]
         )
-
-    @objc.IBAction
-    def saveDataPolicy_(self, _sender):
-        if self._delegate.data_policy()[0].carrier_policy_enabled:
-            self._delegate._show_alert(
-                "正在使用运营商套餐保护", "请到运营商页管理 80% / 98% 保护与自动接管。"
-            )
-            return
-        enabled = bool(self._auto_enabled.state())
-        if enabled and not self._confirm(
-            "允许 Wi-Fi 故障时自动使用 SIM 流量？",
-            "以约 2 秒间隔检查 Wi-Fi；明确断开直接请求接管，联网探测自身有超时等待。"
-            "连续失败后临时提高 QDC507 优先级，恢复后还原。"
-            "网卡无法恢复时，最多重启模块一次，可能短暂中断短信接收；失败即暂停。"
-            "仅在应用运行时保护流量；不会更改 VPN、DNS 或 Wi-Fi 开关。",
-        ):
-            return
-        if self._delegate.save_data_policy(
-            enabled,
-            str(self._data_limit.stringValue()),
-            self._budget_period.indexOfSelectedItem() == 1,
-        ):
-            self.refresh()
-
-    @objc.IBAction
-    def grantData_(self, _sender):
-        if self._confirm(
-            "追加一份 4G 额度？",
-            "将解除限额锁定，并按已保存的上限追加同等额度，不会清除今日／本月流量。"
-            "自动接管开启时，断网后可再次使用 SIM 流量。",
-        ):
-            self._delegate.grant_data_allowance()
 
     @objc.IBAction
     def relayChanged_(self, _sender):

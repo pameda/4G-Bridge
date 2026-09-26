@@ -142,6 +142,8 @@ class AutoDataMonitor:
                     self.status = (
                         "计量不可用，保护性关闭 4G。"
                         if self.error
+                        else "套餐保护已暂停 4G，请查看运营商套餐状态。"
+                        if settings.carrier_policy_enabled
                         else "流量已达上限，4G 已锁定；需要手动追加额度。"
                     )
                     try:

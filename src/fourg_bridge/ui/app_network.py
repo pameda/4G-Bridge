@@ -15,7 +15,7 @@ class AppNetworkTable(AppKit.NSObject):
         self.compact = compact
         self.table = AppKit.NSTableView.alloc().init()
         columns = [
-            ("app", "应用 / 进程", 118 if compact else 240),
+            ("app", "应用 / 进程", 140 if compact else 240),
             ("down", "下载", 82 if compact else 90),
             ("up", "上传", 82 if compact else 90),
         ]
@@ -26,8 +26,9 @@ class AppNetworkTable(AppKit.NSObject):
             column.setTitle_(title)
             column.setWidth_(width)
             self.table.addTableColumn_(column)
-        self.table.setRowHeight_(36)
-        self.table.setUsesAlternatingRowBackgroundColors_(True)
+        self.table.setRowHeight_(30 if compact else 38)
+        self.table.setStyle_(AppKit.NSTableViewStyleInset)
+        self.table.setUsesAlternatingRowBackgroundColors_(not compact)
         self.table.setDataSource_(self)
         self.table.setDelegate_(self)
         self.table.setAccessibilityLabel_("应用网络实时计数")
@@ -35,7 +36,7 @@ class AppNetworkTable(AppKit.NSObject):
         self.view.setDocumentView_(self.table)
         self.view.setHasVerticalScroller_(not compact)
         self.view.setAutohidesScrollers_(True)
-        self.view.heightAnchor().constraintEqualToConstant_(130 if compact else 320).setActive_(
+        self.view.heightAnchor().constraintEqualToConstant_(110 if compact else 320).setActive_(
             True
         )
         return self

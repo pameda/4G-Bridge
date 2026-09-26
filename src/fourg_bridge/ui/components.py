@@ -42,6 +42,8 @@ def stack(views, horizontal=False, spacing=12):
         AppKit.NSLayoutAttributeCenterY if horizontal else AppKit.NSLayoutAttributeLeading
     )
     view.setSpacing_(spacing)
+    if not horizontal:
+        view.setHuggingPriority_forOrientation_(750, AppKit.NSLayoutConstraintOrientationVertical)
     return view
 
 
@@ -70,16 +72,22 @@ def pin(view, container, inset=20):
     )
 
 
-def group(views):
+def group(views, *, accent=False, compact=False):
     box = AppKit.NSBox.alloc().init()
     box.setTitlePosition_(AppKit.NSNoTitle)
     box.setBoxType_(AppKit.NSBoxCustom)
-    box.setBorderType_(AppKit.NSNoBorder)
-    box.setFillColor_(AppKit.NSColor.controlBackgroundColor())
-    box.setCornerRadius_(14)
+    box.setBorderType_(AppKit.NSLineBorder)
+    box.setBorderWidth_(0.5)
+    box.setBorderColor_(AppKit.NSColor.separatorColor().colorWithAlphaComponent_(0.25))
+    box.setFillColor_(
+        AppKit.NSColor.controlAccentColor().colorWithAlphaComponent_(0.06)
+        if accent
+        else AppKit.NSColor.controlBackgroundColor()
+    )
+    box.setCornerRadius_(12)
     box.setContentViewMargins_(AppKit.NSMakeSize(0, 0))
-    content = stack(views, spacing=10)
-    pin(content, box.contentView(), 20)
+    content = stack(views, spacing=6 if compact else 10)
+    pin(content, box.contentView(), 14 if compact else 20)
     for child in views:
         child.widthAnchor().constraintLessThanOrEqualToAnchor_(content.widthAnchor()).setActive_(
             True
@@ -92,17 +100,33 @@ def section_title(title, icon):
 
 
 class PageBackground(AppKit.NSView):
+    def isFlipped(self):
+        return True
+
     def drawRect_(self, rect):
-        AppKit.NSColor.underPageBackgroundColor().setFill()
+        AppKit.NSColor.windowBackgroundColor().setFill()
         AppKit.NSRectFill(rect)
 
 
 def page(title, subtitle, groups):
-    view = PageBackground.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 820, 620))
+    scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 820, 700))
+    scroll.setDrawsBackground_(False)
+    scroll.setHasVerticalScroller_(True)
+    scroll.setAutohidesScrollers_(True)
+    view = PageBackground.alloc().init()
+    view.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    scroll.setDocumentView_(view)
+    view.widthAnchor().constraintEqualToAnchor_(scroll.contentView().widthAnchor()).setActive_(True)
+    view.heightAnchor().constraintGreaterThanOrEqualToAnchor_(
+        scroll.contentView().heightAnchor()
+    ).setActive_(True)
     content = stack(
         [
             stack(
-                [label(title, 26, weight=AppKit.NSFontWeightBold), label(subtitle, secondary=True)],
+                [
+                    label(title, 25, weight=AppKit.NSFontWeightSemibold),
+                    label(subtitle, 12, secondary=True),
+                ],
                 spacing=6,
             ),
             *groups,
@@ -125,7 +149,26 @@ def page(title, subtitle, groups):
             ],
         ]
     )
+    bottom = content.bottomAnchor().constraintEqualToAnchor_constant_(view.bottomAnchor(), -24)
+    bottom.setPriority_(1)
+    bottom.setActive_(True)
+    return scroll
+
+
+def separator():
+    view = AppKit.NSBox.alloc().init()
+    view.setBoxType_(AppKit.NSBoxSeparator)
     return view
+
+
+def spread(left, right):
+    """A full-width native row with trailing actions and a flexible middle."""
+    spacer = AppKit.NSView.alloc().init()
+    row = stack([left, spacer, right], True, 10)
+    spacer.setContentHuggingPriority_forOrientation_(
+        1, AppKit.NSLayoutConstraintOrientationHorizontal
+    )
+    return row
 
 
 class SpeedChart(AppKit.NSView):
