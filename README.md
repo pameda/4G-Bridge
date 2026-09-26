@@ -4,6 +4,8 @@
 
 ## 当前能力
 
+当前发行版仅支持 macOS。Windows 版计划在 macOS 当前验收完成后开发，沿用本仓库，尚无可用 Windows 安装包；范围及 iMessage 平台限制见 [Windows 开发计划](WINDOWS_PLAN.md)。
+
 - 识别 `2CA3:4006` 与 `2C7C:0125`，每次连接重新扫描 USB bulk endpoint。
 - 单一 AT 工作线程，串行 transaction，并将 `+CMTI` 等 URC 与普通响应分流。
 - 读取 SIM、运营商、LTE 注册、RAT、CSQ/RSSI 与 ECM 网络信息。
