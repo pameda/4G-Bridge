@@ -1,14 +1,14 @@
 # 4G Bridge Windows 预览版
 
-版本：0.2.0-preview.1。目标 Windows 11 x64。**不包含 iMessage、Apple 账号登录或短信转发功能。**
+版本：0.2.0-preview.2。目标 Windows 11 x64。**不包含 iMessage、Apple 账号登录或短信转发功能。**
 
 这是新的平台适配，不能用 macOS 实机结果证明 Windows 硬件兼容。Windows QDC507 实机验收尚未执行；自动测试与 Windows 构建结果见 GitHub Actions 的 Windows preview 工作流。
 
 ## 安装与使用
 
-从 [Windows 预览版发布页](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.1) 下载 `4G-Bridge-0.2.0-preview.1-windows-x64-setup.exe` 或便携 ZIP，并核对同页的 `windows-SHA256SUMS.txt`。尚未签名，可能出现 SmartScreen 提示，不应关闭系统安全保护。安装器安装到当前用户的应用目录，不安装驱动，不默认注册登录启动。卸载保留设置及流量锁定记录，避免重新安装绕过保护。
+从 [Windows 预览版发布页](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.2) 下载 `4G-Bridge-0.2.0-preview.2-windows-x64-setup.exe` 或便携 ZIP，并核对同页的 `windows-SHA256SUMS.txt`。尚未签名，可能出现 SmartScreen 提示，不应关闭系统安全保护。安装器安装到当前用户的应用目录，不安装驱动，不默认注册登录启动。更新前从托盘退出旧版；卸载保留设置及流量锁定记录，避免重新安装绕过保护。
 
-构建提交为 `833a28a7fbb794c55653f5e9fd730ac777c50bcd`，在官方 Windows Server 2022 x64 runner 上通过 41 项 Windows 回归、打包后六页界面与托盘启动、安装、安装后启动及卸载检查。下载回本机后 SHA-256 一致，可执行文件确认为 PE x86-64。此结果不代替 Windows 11 或 QDC507 实机验收，详见 [测试记录](TESTING.md)。
+新版验证结果以发布页对应构建记录为准。Windows 工作流检查回归测试、浅深色百分比边界、六页布局、打包后启动、安装及卸载；这不代替 Windows 11 或 QDC507 实机验收。
 
 1. 安装并启动，接入 QDC507，关闭其他占用模块的控制软件。
 2. 先查看“设备”页，确认系统网卡与 AT 串口已就绪。只匹配 `2CA3:4006` / `2C7C:0125`；没有兼容网卡或有多个模块时不猜测控制目标。
@@ -21,6 +21,7 @@
 ## 功能与边界
 
 - 中文总览、运营商与流量、设备、应用网络、运行日志、设置六页；系统主题控件、浅深色、蓝色信号图标及套餐环形图。
+- 总览突出套餐估算已用百分比；环形图与百分比同色：低于 60% 蓝色、60% 起橙色、75% 起红色预警。明确标记当前所在的低于 80%、80% 至 98%、达到 98% 区间；未知数据不显示为 0%。预警颜色不改变实际保护状态，过期／锁定状态另行展示。
 - Windows 系统 COM AT 通道，不使用 macOS USB 后端、不改 USB personality；QDC507 当前模式是否暴露可用串口和网卡必须实机确认。无适用驱动时明确提示，不自动安装社区驱动。
 - Wi-Fi 物理断开走快速接管；仍连接但网络失败需连续三轮确认，恢复连续两轮后关闭自动接管的数据。包含系统枚举、探测及 DHCP 延迟，不保证瞬时或无缝。
 - 仅临时调整模块 IPv4 metric；原值先落盘，关闭及下次启动尝试恢复。保留 Wi-Fi、VPN、DNS、其他网卡及路由配置。失败时回滚并暂停，不反复重启。IPv6 接管、第三方 VPN 底层迁移未验收，不宣称支持所有拓扑。

@@ -10,7 +10,35 @@ from fourg_bridge.support.presentation import (
     format_bytes,
     operator_name,
     route_description,
+    usage_style,
 )
+
+
+@pytest.mark.parametrize(
+    "fraction,color,stage,percent",
+    [
+        (None, "secondary", None, "—"),
+        (float("nan"), "secondary", None, "—"),
+        (float("inf"), "secondary", None, "—"),
+        (-1, "secondary", None, "—"),
+        (0, "blue", 0, "0.0%"),
+        (0.113, "blue", 0, "11.3%"),
+        (0.5999, "blue", 0, "59.9%"),
+        (0.6, "orange", 0, "60.0%"),
+        (0.7499, "orange", 0, "74.9%"),
+        (0.75, "red", 0, "75.0%"),
+        (0.79999, "red", 0, "79.9%"),
+        (0.8, "red", 1, "80.0%"),
+        (0.97999, "red", 1, "97.9%"),
+        (0.98, "red", 2, "98.0%"),
+        (1, "red", 2, "100.0%"),
+        (1.2, "red", 2, "120.0%"),
+    ],
+)
+def test_usage_warning_colors_and_unrounded_policy_boundaries(fraction, color, stage, percent):
+    style = usage_style(fraction)
+    assert (style.color, style.stage, style.percent) == (color, stage, percent)
+    assert style.title
 
 
 @pytest.mark.parametrize(

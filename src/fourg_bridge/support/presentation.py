@@ -4,8 +4,34 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from dataclasses import dataclass
 
 from fourg_bridge.models import DataState, ModemSnapshot, TrafficSnapshot
+
+
+@dataclass(frozen=True)
+class UsageStyle:
+    percent: str
+    color: str
+    title: str
+    stage: int | None
+
+
+def usage_style(fraction: float | None) -> UsageStyle:
+    """Visual warnings only; never grants data consent or changes quota state."""
+    if fraction is None or not math.isfinite(fraction) or fraction < 0:
+        return UsageStyle("—", "secondary", "等待套餐数据", None)
+    # Truncate rather than round across an 80%/98% policy boundary.
+    percent = f"{math.floor(fraction * 1000) / 10:.1f}%"
+    if fraction >= 0.98:
+        return UsageStyle(percent, "red", "已达到 98% 停用线", 2)
+    if fraction >= 0.8:
+        return UsageStyle(percent, "red", "已达到 80% 确认线", 1)
+    if fraction >= 0.75:
+        return UsageStyle(percent, "red", "即将达到 80% · 提前预警", 0)
+    if fraction >= 0.6:
+        return UsageStyle(percent, "orange", "留意用量 · 提醒线为 80%", 0)
+    return UsageStyle(percent, "blue", "当前低于 80% 提醒线", 0)
 
 
 def format_bytes(value: float | int) -> str:

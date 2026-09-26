@@ -1,6 +1,7 @@
 """Portable regression suite; unittest runs on clean Windows without pip installs."""
 
 import ctypes
+import importlib.util
 import json
 import socket
 import tempfile
@@ -8,11 +9,12 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fourg_bridge.cellular.carrier_query import CarrierUsage, parse_usage, query_pdu
 from fourg_bridge.network.failover import Action
 from fourg_bridge.storage.carrier_budget import CarrierBudgetStore
+from fourg_bridge.support.presentation import usage_style
 from fourg_bridge.windows.app_traffic import Aggregator, DataStats, OwnerRow, TcpRow
 from fourg_bridge.windows.metric import MetricLease
 from fourg_bridge.windows.native import DCB, IfRow, SerialPort
@@ -48,6 +50,54 @@ WIFI = Adapter(
     "192.0.2.1",
     True,
 )
+
+
+class UsagePresentationTests(unittest.TestCase):
+    def test_warning_boundaries(self):
+        for fraction, color, stage in (
+            (0, "blue", 0),
+            (0.59999, "blue", 0),
+            (0.6, "orange", 0),
+            (0.74999, "orange", 0),
+            (0.75, "red", 0),
+            (0.79999, "red", 0),
+            (0.8, "red", 1),
+            (0.97999, "red", 1),
+            (0.98, "red", 2),
+            (1.02, "red", 2),
+        ):
+            with self.subTest(fraction=fraction):
+                visual = usage_style(fraction)
+                self.assertEqual((visual.color, visual.stage), (color, stage))
+
+    def test_no_rounding_across_protection_boundaries(self):
+        self.assertEqual(usage_style(0.79999).percent, "79.9%")
+        self.assertEqual(usage_style(0.97999).percent, "97.9%")
+        self.assertEqual(usage_style(1.02).percent, "102.0%")
+
+    def test_unknown_is_not_zero_or_authorization(self):
+        for fraction in (None, float("nan"), float("inf"), -0.1):
+            visual = usage_style(fraction)
+            self.assertEqual(visual.percent, "—")
+            self.assertIsNone(visual.stage)
+
+    @unittest.skipUnless(importlib.util.find_spec("_tkinter"), "Tk is verified by Windows CI")
+    def test_render_does_not_touch_runtime_or_budget(self):
+        from fourg_bridge.windows.ui import Window
+
+        window = object.__new__(Window)
+        window.runtime = Mock()
+        window.ring = Mock()
+        window.style = Mock()
+        window.palette = dict.fromkeys(
+            ("blue", "orange", "red", "secondary", "bg", "track", "card", "muted"), "#123456"
+        )
+        window.labels = {key: Mock() for key in ("percent", "usage_band")}
+        window.stage_cards = [Mock() for _ in range(3)]
+        for fraction in (None, 0, 0.75, 0.8, 0.98, 1.1):
+            window.render_usage(fraction)
+        self.assertEqual(window.runtime.mock_calls, [])
+        window.labels["percent"].set.assert_called_with("110.0%  套餐估算已用")
 
 
 class PlatformTests(unittest.TestCase):

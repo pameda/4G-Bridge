@@ -86,6 +86,7 @@ def _run(args: argparse.Namespace) -> None:
             raise SystemExit(1)
         return
     root = tk.Tk()
+    smoke_errors: list[str] = []
     try:
         directory = (
             Path(tempfile.mkdtemp(prefix="4gbridge-ui-")) if args.ui_smoke else app_directory()
@@ -102,23 +103,29 @@ def _run(args: argparse.Namespace) -> None:
         if args.ui_smoke:
 
             def smoke() -> None:
-                for index in range(6):
-                    window.tabs.select(index)
-                    root.update_idletasks()
-                args.ui_smoke.write_text(
-                    json.dumps(
-                        {
-                            "version": VERSION,
-                            "pages": 6,
-                            "window": [root.winfo_width(), root.winfo_height()],
-                            "tray": bool(window.tray and window.tray.available),
-                            "hardware_test": "not_run",
-                            "mutations": 0,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                window.destroy()
+                from fourg_bridge.windows.smoke import check_usage
+
+                try:
+                    cases = check_usage(window)
+                    args.ui_smoke.write_text(
+                        json.dumps(
+                            {
+                                "version": VERSION,
+                                "pages": 6,
+                                "usage_theme_cases": cases,
+                                "window": [root.winfo_width(), root.winfo_height()],
+                                "tray": bool(window.tray and window.tray.available),
+                                "hardware_test": "not_run",
+                                "mutations": 0,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                except Exception as error:
+                    smoke_errors.append(type(error).__name__ + ": " + str(error))
+                    args.ui_smoke.write_text(json.dumps({"errors": smoke_errors}), encoding="utf-8")
+                finally:
+                    window.destroy()
 
             root.after(1200, smoke)
         else:
@@ -126,6 +133,8 @@ def _run(args: argparse.Namespace) -> None:
             if args.background:
                 window.hide()
         root.mainloop()
+        if smoke_errors:
+            raise SystemExit(1)
     except Exception:
         messagebox.showerror(
             "4G Bridge 启动失败",

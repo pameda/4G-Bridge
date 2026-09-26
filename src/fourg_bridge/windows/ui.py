@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any
 
+from fourg_bridge.support.presentation import usage_style
 from fourg_bridge.windows import VERSION, native
 from fourg_bridge.windows.runtime import Runtime
 from fourg_bridge.windows.settings import login_enabled, set_login
@@ -40,8 +41,8 @@ class Window:
         self._ui_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.tray: TrayIcon | None = None
         root.title("4G Bridge")
-        root.geometry("960x730")
-        root.minsize(820, 650)
+        root.geometry("1000x780")
+        root.minsize(960, 650)
         root.protocol("WM_DELETE_WINDOW", self.hide)
         root.option_add("*Font", ("Microsoft YaHei UI", 10))
         self.style = ttk.Style(root)
@@ -60,13 +61,29 @@ class Window:
         )
         self.tabs: Any = ttk.Notebook(outer)
         self.tabs.pack(fill="both", expand=True)
-        self.pages = [ttk.Frame(self.tabs, padding=20) for _ in range(6)]
-        for page, title_text in zip(
-            self.pages,
-            ("总览", "运营商与流量", "设备", "应用网络", "运行日志", "设置"),
-            strict=True,
-        ):
-            self.tabs.add(page, text=title_text)
+        self.pages: list[ttk.Frame] = []
+        self.page_canvases: list[tk.Canvas] = []
+        for title_text in ("总览", "运营商与流量", "设备", "应用网络", "运行日志", "设置"):
+            shell = ttk.Frame(self.tabs)
+            canvas = tk.Canvas(shell, highlightthickness=0, background=self.palette["bg"])
+            scroll = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+            canvas.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+            canvas.pack(side="left", fill="both", expand=True)
+            page = ttk.Frame(canvas, padding=20)
+            item = canvas.create_window(0, 0, anchor="nw", window=page)
+
+            def update_region(event: Any, target: tk.Canvas = canvas) -> None:
+                target.configure(scrollregion=target.bbox("all"))
+
+            def update_width(event: Any, target: tk.Canvas = canvas, item_id: int = item) -> None:
+                target.itemconfigure(item_id, width=event.width)
+
+            page.bind("<Configure>", update_region)
+            canvas.bind("<Configure>", update_width)
+            self.pages.append(page)
+            self.page_canvases.append(canvas)
+            self.tabs.add(shell, text=title_text)
         self.labels: dict[str, tk.StringVar] = {}
         self._overview()
         self._carrier()
@@ -101,10 +118,15 @@ class Window:
             "muted": "#b4bdca" if dark else "#58677c",
             "track": "#434b56" if dark else "#e2e8f1",
             "blue": "#60b5ff" if dark else "#0078d4",
+            "orange": "#ffc06e" if dark else "#995500",
+            "red": "#ff8b8b" if dark else "#bd252b",
+            "secondary": "#b4bdca" if dark else "#58677c",
         }
 
     def _styles(self) -> None:
         p = self.palette
+        for canvas in getattr(self, "page_canvases", []):
+            canvas.configure(background=p["bg"])
         # Ttk uses system controls on light Windows; dark uses its bundled theme,
         # not an external theme package or a WebView skin.
         theme = "vista" if p["bg"] != "#202020" and "vista" in self.style.theme_names() else "clam"
@@ -147,6 +169,7 @@ class Window:
         self.label(page, "connection", style="Heading.TLabel")
         self.label(page, "speed", style="Metric.TLabel")
         self.label(page, "totals")
+        self.label(page, "percent", style="Usage.TLabel")
         self.label(page, "policy", style="Status.TLabel")
         row = ttk.Frame(page)
         row.pack(anchor="w", pady=20)
@@ -182,6 +205,23 @@ class Window:
         info.pack(side="left", fill="x", expand=True)
         self.label(info, "usage", style="Heading.TLabel")
         self.label(info, "stamp", style="Muted.TLabel")
+        self.label(info, "usage_band", style="UsageBand.TLabel")
+        stages = ttk.Frame(page)
+        stages.pack(fill="x", pady=(12, 4))
+        self.stage_cards = []
+        for index in range(3):
+            card = tk.Label(
+                stages,
+                padx=14,
+                pady=10,
+                justify="left",
+                highlightthickness=1,
+                font=("Microsoft YaHei UI", 10),
+            )
+            card.grid(row=0, column=index, sticky="nsew", padx=(0, 8))
+            stages.columnconfigure(index, weight=1)
+            self.stage_cards.append(card)
+        self.label(page, "carrier_policy", style="Muted.TLabel")
         self.label(page, "session")
         form = ttk.Frame(page)
         form.pack(anchor="w", pady=15)
@@ -467,31 +507,55 @@ class Window:
             self.tray.close()
         self.root.destroy()
 
-    def _ring(self) -> None:
-        usage = self.runtime.budget.usage()
+    def render_usage(self, fraction: float | None) -> None:
+        """Render a supplied estimate only; never mutate budget or grant consent."""
+        visual = usage_style(fraction)
         canvas, p = self.ring, self.palette
+        color = p[visual.color]
+        self.style.configure("Usage.TLabel", foreground=color, font=("Segoe UI", 28, "bold"))
+        self.style.configure("UsageBand.TLabel", foreground=color)
+        self.labels["percent"].set(f"{visual.percent}  套餐估算已用")
+        self.labels["usage_band"].set(visual.title)
+        for index, (card, title, detail) in enumerate(
+            zip(
+                self.stage_cards,
+                ("低于 80%", "80% 至 98%", "达到 98%"),
+                ("按保护状态使用", "确认后继续", "自动停止"),
+                strict=True,
+            )
+        ):
+            selected = visual.stage == index
+            card.configure(
+                text=f"{'● 当前区间 · ' if selected else ''}{title}\n{detail}",
+                background=p["card"],
+                foreground=color if selected else p["muted"],
+                highlightbackground=color if selected else p["track"],
+                highlightcolor=color if selected else p["track"],
+            )
+        canvas.configure(background=p["bg"])
         canvas.delete("all")
         canvas.create_oval(18, 18, 172, 172, outline=p["track"], width=12)
-        fraction = min(1, max(0, usage.fraction)) if usage else 0
-        color = "#d64b4b" if fraction >= 0.98 else "#d98920" if fraction >= 0.8 else p["blue"]
-        if fraction:
+        arc_fraction = min(1, max(0, fraction)) if visual.stage is not None and fraction else 0
+        if arc_fraction:
             canvas.create_arc(
                 18,
                 18,
                 172,
                 172,
                 start=90,
-                extent=-fraction * 359.99,
+                extent=-arc_fraction * 359.99,
                 style="arc",
                 outline=color,
                 width=12,
+                tags="usage-arc",
             )
         canvas.create_text(
             95,
             86,
-            text=f"{fraction:.1%}" if usage else "—",
-            fill=p["fg"],
-            font=("Segoe UI", 27, "bold"),
+            text=visual.percent,
+            fill=color,
+            font=("Segoe UI", 30, "bold"),
+            tags="usage-value",
         )
         canvas.create_text(
             95, 117, text="套餐估算已用", fill=p["muted"], font=("Microsoft YaHei UI", 10)
@@ -570,6 +634,7 @@ class Window:
             usage = runtime.budget.usage()
             state = runtime.budget.status().state
             self.labels["policy"].set(STATE_NAMES[state])
+            self.labels["carrier_policy"].set(f"数据保护：{STATE_NAMES[state]}")
             self.labels["usage"].set(
                 f"已用 {amount(usage.used_bytes)}\n总量 {amount(usage.total_bytes)}"
                 if usage
@@ -580,7 +645,7 @@ class Window:
                 if usage
                 else "请确认后查询一次运营商"
             )
-            self._ring()
+            self.render_usage(usage.fraction if usage else None)
             logs = runtime.log.text(self.warnings.get())
             if logs != self._log_cache:
                 self._log_cache = logs

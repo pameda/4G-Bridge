@@ -3,7 +3,7 @@ name: Windows preview
 on:
   push:
     branches: [main]
-    paths: ['src/fourg_bridge/windows/**', 'tests/windows/**', '.github/workflows/windows.yml']
+    paths: ['src/fourg_bridge/**', 'tests/windows/**', 'script/*windows*', 'requirements-windows-build.lock', '.github/workflows/windows.yml']
   workflow_dispatch:
     inputs:
       package:
