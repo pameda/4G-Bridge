@@ -4,7 +4,7 @@
 
 ## 当前能力
 
-稳定使用目标仍为 macOS。另提供独立的 [Windows 预览版](WINDOWS.md)（[安装包下载](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.1)），不包含 iMessage；已通过 Windows 云端构建、启动及安装／卸载验证，QDC507 实机验收尚未完成。下列功能说明针对 macOS，Windows 范围与限制见其独立文档。
+稳定使用目标仍为 macOS。另提供独立的 [Windows 预览版](WINDOWS.md)（[安装包下载](https://github.com/pameda/4G-Bridge/releases/tag/windows-v0.2.0-preview.3)），不包含 iMessage；已通过 Windows 云端构建、启动及安装／卸载验证，QDC507 实机验收尚未完成。下列功能说明针对 macOS，Windows 范围与限制见其独立文档。
 
 - 识别 `2CA3:4006` 与 `2C7C:0125`，每次连接重新扫描 USB bulk endpoint。
 - 单一 AT 工作线程，串行 transaction，并将 `+CMTI` 等 URC 与普通响应分流。

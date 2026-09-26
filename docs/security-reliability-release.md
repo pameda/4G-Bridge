@@ -24,3 +24,12 @@ Mac 0.1.13；Windows 0.2.0-preview.3。不新增权限或第三方依赖。
 Mac 仍是 ad-hoc 未公证包，Windows 仍是未签名预览版；不绕过 Gatekeeper／SmartScreen。Windows 无真实 QDC507，模拟／云端通过不等于实际联网已验收。未执行真实发信、删除短信、收费联网或主动断网。
 
 既有构建依赖审查项、正式签名及更广泛安全审计不在本轮关闭范围；不能将本更新称为无漏洞认证。
+
+## 验证结果（2026-09-26）
+
+- 安装包源码提交：`dab37ff103297348903df412979d6ce587a2660b`。
+- Mac：280 项通过、1 项跳过（本机 Python 不含 Tk 的 Windows 界面测试）；Ruff、mypy 通过。按现有统计范围整体覆盖率 92.47%，选定核心模块 95%，不代表完整 UI／Windows 的覆盖率。
+- Mac arm64 App：深浅色界面 smoke、嵌套签名完整性、DMG 只读挂载和 SHA-256 验证通过。合成中文／Emoji 的 AppleScript 标准输入及进程参数隐私检查通过，没有调用真实发送。
+- Windows：[云端构建及验收](https://github.com/pameda/4G-Bridge/actions/runs/36250499344) 成功，52 项测试通过；打包后进程超时回收、系统网络通知注册成功。安装后的六页面、18 个配色／用量场景及托盘通过，安装／启动／卸载通过。
+- 下载回本机的 Windows x64 EXE／ZIP 与 Mac DMG 均通过 SHA-256 核对。Windows 报告明确标记 `hardware_test: not_run`、`mutations: 0`。
+- 保留正在运行的旧 Mac 应用，未自动替换安装。新版真实 SIM、短信端到端和断网切换仍待授权验收。
