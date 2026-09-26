@@ -40,7 +40,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install reviewed packaging tools
         if: github.event_name == 'workflow_dispatch' && inputs.package
-        run: python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements-windows-build.lock
+        run: |
+          python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements-windows-build.lock
       - name: Build EXE and installer
         if: github.event_name == 'workflow_dispatch' && inputs.package
         run: python script/build_windows.py
