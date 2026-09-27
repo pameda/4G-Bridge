@@ -154,6 +154,7 @@ class MenuBarController(AppKit.NSObject):
         self._set("gateway", snapshot.gateway or "—")
         self._set("default", snapshot.default_interface or "—")
         self._set("vpn", "已连接" if snapshot.vpn_active else "未连接")
+        self._set("relay", self._delegate.relay_health())
         self._values["data"].setTitle_(
             "关闭 4G 数据" if snapshot.data_state == DataState.ON else "开启 4G 数据…"
         )
@@ -183,7 +184,7 @@ class MenuBarController(AppKit.NSObject):
 
     @objc.python_method
     def setRelayStatus_recent_(self, enabled: bool, recent: str | None) -> None:
-        self._set("relay", "✓ 已开启" if enabled else "未开启")
+        self._set("relay", self._delegate.relay_health())
         self._set("recent", recent or "—")
 
     @objc.IBAction

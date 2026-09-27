@@ -120,6 +120,24 @@ class RelayDatabase:
                 f"UPDATE relay SET {','.join(assignments)} WHERE message_hash=?", values
             )
 
+    def claim_send(self, message_hash: str) -> bool:
+        """Atomically reserve a due message; concurrent workers must not double-send."""
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE relay SET status=?,updated_at=? WHERE message_hash=? "
+                "AND status IN (?,?) AND (next_retry_at IS NULL OR next_retry_at<=?)",
+                (
+                    RelayStatus.SENDING,
+                    now,
+                    message_hash,
+                    RelayStatus.PENDING,
+                    RelayStatus.RETRY,
+                    now,
+                ),
+            )
+            return result.rowcount == 1
+
     def due(self, now: datetime | None = None) -> tuple[RelayRecord, ...]:
         if self.blocked:
             return ()

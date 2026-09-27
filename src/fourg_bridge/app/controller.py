@@ -64,6 +64,7 @@ class ApplicationController:
         self._recent_relay = None
         self._bridge_busy = False
         self._bridge_status = "尚未检查 iMessage；连接检查不会发送消息。"
+        self._relay_health = "尚未检查"
         self._runtime: ModemRuntime | None = None
         self._login_item = LoginItem()
         self._app_tracker = AppTrafficTracker()
@@ -470,6 +471,7 @@ class ApplicationController:
 
     def workspaceDidSleep_(self, _notification) -> None:
         self._event("sleep")
+        self._keychain.clear_session_target()
         self._query_epoch += 1
         self._query_suspended = True
         self._auto_data.suspended = True
@@ -623,10 +625,14 @@ class ApplicationController:
         if recent != self._recent_relay:
             self._event("relay")
         self._relay_wait_logged = False
+        self._relay_health = "请求已接受"
         self._recent_relay = recent
         self._menu.setRelayStatus_recent_(self._settings.relay_enabled, recent)
 
     def _relay_waiting(self, result: RelayResult) -> None:
+        self._relay_health = (
+            "等待授权" if result.error == RelayError.KEYCHAIN_UNAVAILABLE else "等待配置"
+        )
         if not getattr(self, "_relay_wait_logged", False):
             self._event("relay_wait")
             self._relay_wait_logged = True
@@ -810,6 +816,8 @@ class ApplicationController:
         return self._settings.relay_enabled and not self.diagnostic_mode
 
     def set_relay_enabled(self, enabled: bool) -> None:
+        if not enabled:
+            self._keychain.clear_session_target()
         self._settings = replace(self._settings, relay_enabled=enabled)
         self._settings_store.save(self._settings)
         self._menu.setRelayStatus_recent_(enabled, self._recent_relay)
@@ -831,19 +839,45 @@ class ApplicationController:
         def worker() -> None:
             try:
                 target = self._keychain.get_target(allow_interaction=True)
+                # Preserve one-time read authorization and immediately validate
+                # Messages without sending, rather than making the user guess the next step.
+                result = (
+                    self._bridge.check()
+                    if target
+                    else RelayResult(False, RelayError.TARGET_UNAVAILABLE)
+                )
                 status = (
-                    "已授权读取目标，请检查目标格式。" if target else "未保存目标，请填写并保存。"
+                    "目标已授权，Messages 连接检查通过；未发送消息。"
+                    if result.accepted
+                    else self._relay_error_message(result)
                 )
             except Exception:
                 status = "未能获得钥匙串授权。没有发送消息，请重新授权或保存目标。"
-            AppHelper.callAfter(self._target_authorized, status)
+                result = RelayResult(False, RelayError.KEYCHAIN_UNAVAILABLE)
+            AppHelper.callAfter(self._target_authorized, status, result.accepted)
 
         threading.Thread(target=worker, name="Keychain-Authorization", daemon=True).start()
 
-    def _target_authorized(self, status: str) -> None:
+    def _target_authorized(self, status: str, ready: bool = False) -> None:
         self._bridge_busy = False
         self._bridge_status = status
+        self._relay_health = "连接检查通过" if ready else "等待配置"
         self._settings_window.refresh()
+
+    def relay_health(self) -> str:
+        if self.diagnostic_mode:
+            return "测试模式 · 自动转发暂停"
+        if not self._settings.relay_enabled:
+            return "已关闭"
+        if self._database.blocked:
+            return "数据库异常 · 已暂停"
+        if self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN):
+            return "有发送不确定项 · 待核对"
+        if self._database.records_with_status(RelayStatus.FAILED):
+            return "有失败项 · 可手动重试"
+        if self._database.records_with_status(RelayStatus.RETRY):
+            return "等待重试"
+        return getattr(self, "_relay_health", "尚未检查")
 
     def modem_details(self) -> str:
         snapshot = self._snapshot
@@ -876,16 +910,39 @@ class ApplicationController:
         )
 
     def set_relay_target(self, target: str) -> bool:
+        if self._bridge_busy:
+            return False
         try:
-            self._keychain.set_target(normalize_target(target) if target.strip() else "")
-            self._show_alert("已保存", "转发目标已安全存入 macOS 钥匙串。")
-            self._bridge_status = "目标已更新，请先检查连接，再发送测试。"
-            return True
+            value = normalize_target(target) if target.strip() else ""
         except InvalidTarget as error:
             self._show_alert("目标格式需要调整", str(error))
-        except KeychainError:
-            self._show_alert("保存失败", "无法写入 macOS 钥匙串。")
-        return False
+            return False
+        self._bridge_busy = True
+        self._bridge_status = "正在保存目标；如系统要求，请完成钥匙串授权。不会发送消息。"
+        self._settings_window.refresh(False)
+
+        def worker() -> None:
+            try:
+                self._keychain.set_target(value)
+                saved = True
+            except Exception:
+                saved = False
+            AppHelper.callAfter(self._target_saved, saved, bool(value))
+
+        threading.Thread(target=worker, name="Keychain-Save", daemon=True).start()
+        return True
+
+    def _target_saved(self, saved: bool, has_target: bool) -> None:
+        self._bridge_busy = False
+        self._relay_health = "尚未检查" if saved and has_target else "等待配置"
+        self._bridge_status = (
+            ("目标已更新，请先检查连接，再发送测试。" if has_target else "目标已移除。")
+            if saved
+            else "无法写入 macOS 钥匙串；输入内容已保留，请授权后重新保存。"
+        )
+        self._settings_window.refresh(saved)
+        if not saved:
+            self._show_alert("保存失败", self._bridge_status)
 
     def relay_queue_summary(self) -> str:
         if self._database.blocked:
@@ -932,6 +989,16 @@ class ApplicationController:
             self.rescan()
         self._show_alert("已更新转发队列", f"{len(records)} 项将在模块短信重新读取后发送。")
 
+    def retry_failed_relay(self) -> None:
+        records = self._database.records_with_status(RelayStatus.FAILED)
+        for record in records:
+            self._database.transition(record.message_hash, RelayStatus.RETRY, retry_count=0)
+        if records:
+            self.rescan()
+        self._show_alert(
+            "已重试失败项", f"{len(records)} 项将在模块短信重新读取后重试。发送不确定项未更改。"
+        )
+
     def confirm_delivery_unknown(self) -> None:
         records = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)
         for record in records:
@@ -970,12 +1037,14 @@ class ApplicationController:
     def _bridge_finished(self, result: RelayResult, send: bool) -> None:
         self._bridge_busy = False
         if result.accepted:
+            self._relay_health = "请求已接受" if send else "连接检查通过"
             self._bridge_status = (
                 "Messages 已接受测试发送请求；请在“信息”中确认是否出现红色发送失败标记。"
                 if send
                 else "连接检查通过；未发送消息，也无法仅凭此检查确定对方已开通 iMessage。"
             )
         else:
+            self._relay_health = "发送结果不确定" if result.delivery_uncertain else "等待配置"
             self._bridge_status = self._relay_error_message(result)
         self._settings_window.refresh(False)
         self._show_alert("iMessage 测试" if send else "iMessage 连接检查", self._bridge_status)
@@ -1011,12 +1080,14 @@ class ApplicationController:
         alert.runModal()
 
     def quit(self) -> None:
+        self._keychain.clear_session_target()
         self._query_epoch += 1
         self._query_suspended = True
         self._force_data_off("quit")
         AppKit.NSApp.terminate_(None)
 
     def close(self) -> None:
+        self._keychain.clear_session_target()
         self._query_epoch += 1
         self._query_suspended = True
         self._auto_data.stop.set()

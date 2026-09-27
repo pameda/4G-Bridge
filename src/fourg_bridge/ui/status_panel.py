@@ -188,7 +188,7 @@ class StatusPanelController(AppKit.NSViewController):
             if sample
             else "↓ —    ↑ —    等待网卡采样"
         )
-        self._relay.setStringValue_("已开启" if self._delegate.relay_enabled() else "未开启")
+        self._relay.setStringValue_(self._delegate.relay_health())
         self._recent.setStringValue_(self._delegate.recent_relay() or "本次运行暂无转发")
         if getattr(self._delegate, "diagnostic_mode", False):
             self._title.setStringValue_("短信测试模式")

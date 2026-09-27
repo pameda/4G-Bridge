@@ -134,3 +134,56 @@ def test_cleanup_exception_cannot_erase_accepted_state(tmp_path):
     relay.retry_cleanup()
     relay.enqueue(_message())
     assert bridge.calls == 1
+
+
+def test_unexpected_bridge_exception_is_uncertain_and_never_retried(tmp_path):
+    class BrokenBridge(FakeBridge):
+        def relay(self, sender, timestamp, body):
+            self.calls += 1
+            raise RuntimeError("sensitive exception must not be persisted")
+
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+    bridge = BrokenBridge(RelayResult(True))
+    cleaner = FakeCleaner()
+    relay = SMSRelay(database, bridge, cleaner)
+    record = relay.enqueue(_message())
+    assert record.status == RelayStatus.DELIVERY_UNKNOWN
+    assert record.last_error == RelayError.SCRIPT_FAILED
+    relay.enqueue(_message())
+    assert bridge.calls == 1 and cleaner.calls == 0
+    assert b"sensitive exception" not in (tmp_path / "relay.sqlite").read_bytes()
+
+
+def test_atomic_claim_only_one_worker_can_send(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+    record = database.create_pending("hash", "10086", "2026-09-23T00:00:00+00:00", ())
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claimed = list(pool.map(lambda _: database.claim_send(record.message_hash), range(8)))
+    assert claimed.count(True) == 1
+    assert database.get(record.message_hash).status == RelayStatus.SENDING
+
+
+def test_nested_enqueue_does_not_send_inflight_message_twice(tmp_path):
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+
+    class ReentrantBridge(FakeBridge):
+        def relay(self, sender, timestamp, body):
+            self.calls += 1
+            assert relay.enqueue(_message()).status == RelayStatus.SENDING
+            return RelayResult(True)
+
+    bridge = ReentrantBridge(RelayResult(True))
+    relay = SMSRelay(database, bridge, FakeCleaner())
+    assert relay.enqueue(_message()).status == RelayStatus.SENT
+    assert bridge.calls == 1
+
+
+def test_stale_attempt_cannot_resend_an_accepted_record(tmp_path):
+    database = RelayDatabase(tmp_path / "relay.sqlite")
+    bridge = FakeBridge(RelayResult(True))
+    relay = SMSRelay(database, bridge, FakeCleaner())
+    record = relay.enqueue(_message())
+    assert relay._attempt(record, _message()).status == RelayStatus.SENT
+    assert bridge.calls == 1

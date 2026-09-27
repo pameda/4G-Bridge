@@ -262,6 +262,8 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._target.setFont_(AppKit.NSFont.systemFontOfSize_(14))
         self._queue_info = label("转发队列正常", 12, True)
         self._bridge_status = label("尚未检查 iMessage", 12, True)
+        self._relay_health = label("尚未检查", 12, True)
+        self._save_target_button = self._button("保存目标", "saveTarget:")
         self._check_button = self._button("检查连接", "checkMessages:")
         self._test_button = self._button("发送测试消息…", "sendTest:")
         self._authorize_button = self._button("授权读取目标", "authorizeTarget:")
@@ -293,7 +295,8 @@ class SettingsWindowController(AppKit.NSWindowController):
                             ],
                             True,
                             16,
-                        )
+                        ),
+                        self._relay_health,
                     ]
                 ),
                 group(
@@ -302,7 +305,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                         self._target,
                         stack(
                             [
-                                self._button("保存目标", "saveTarget:"),
+                                self._save_target_button,
                                 self._authorize_button,
                                 self._check_button,
                                 self._test_button,
@@ -321,6 +324,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                             [
                                 self._button("重新发送不确定项…", "retryUnknown:"),
                                 self._button("确认已发送…", "confirmUnknown:"),
+                                self._button("重试失败项…", "retryFailed:"),
                             ],
                             True,
                         ),
@@ -742,6 +746,9 @@ class SettingsWindowController(AppKit.NSWindowController):
             self._loaded_target = self._delegate.relay_target() or ""
             self._target.setStringValue_(self._loaded_target)
         busy, bridge_status = self._delegate.bridge_status()
+        self._relay_health.setStringValue_(self._delegate.relay_health())
+        self._save_target_button.setEnabled_(not busy)
+        self._target.setEnabled_(not busy)
         self._bridge_status.setStringValue_(bridge_status)
         if getattr(self._delegate, "diagnostic_mode", False):
             self._bridge_status.setStringValue_(
@@ -845,9 +852,7 @@ class SettingsWindowController(AppKit.NSWindowController):
             )
             for value in self._details.values():
                 value.setStringValue_("测试模式未检测")
-        self._overview_relay.setStringValue_(
-            "已开启" if self._delegate.relay_enabled() else "未开启"
-        )
+        self._overview_relay.setStringValue_(self._delegate.relay_health())
         self._recent.setStringValue_(self._delegate.recent_relay() or "尚无转发记录")
         self._queue_info.setStringValue_(self._delegate.relay_queue_summary())
         self._appearance.setSelectedSegment_(
@@ -950,8 +955,7 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.IBAction
     def saveTarget_(self, _sender):
-        if self._delegate.set_relay_target(str(self._target.stringValue())):
-            self.refresh()
+        self._delegate.set_relay_target(str(self._target.stringValue()))
 
     @objc.python_method
     def _target_saved(self):
@@ -987,6 +991,12 @@ class SettingsWindowController(AppKit.NSWindowController):
             "发送 iMessage 测试？", "将向已保存的目标发送一条测试消息。不会通过 SIM 发送短信。"
         ):
             self._delegate.send_test_message()
+
+    @objc.IBAction
+    def retryFailed_(self, _sender):
+        if self._confirm("重试未发送成功的失败项？", "只处理失败项，不更改发送不确定项。"):
+            self._delegate.retry_failed_relay()
+            self.refresh(False)
 
     @objc.IBAction
     def retryUnknown_(self, _sender):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from fourg_bridge.models import AssembledSMS, CleanupProof, RelayResult, RelayStatus
+from fourg_bridge.models import AssembledSMS, CleanupProof, RelayError, RelayResult, RelayStatus
 from fourg_bridge.sms.receiver import CleanupResult
 from fourg_bridge.storage.database import RelayDatabase, RelayRecord
 from fourg_bridge.support.privacy import stable_message_hash
@@ -40,6 +40,7 @@ class SMSRelay:
             self._cleaner.proofs(message),
         )
         if record.status in (
+            RelayStatus.SENDING,
             RelayStatus.SENT,
             RelayStatus.CLEANUP_PENDING,
             RelayStatus.CLEANUP_BLOCKED,
@@ -84,8 +85,14 @@ class SMSRelay:
         )
 
     def _attempt(self, record: RelayRecord, message: AssembledSMS) -> RelayRecord:
-        self._database.transition(record.message_hash, RelayStatus.SENDING)
-        result = self._bridge.relay(message.sender, message.timestamp, message.body)
+        if not self._database.claim_send(record.message_hash):
+            return self._database.get(record.message_hash) or record
+        try:
+            result = self._bridge.relay(message.sender, message.timestamp, message.body)
+        except Exception:
+            # An unexpected exception may occur after Messages accepted the request.
+            # Keep the app alive and record uncertainty immediately, never blindly retry.
+            result = RelayResult(False, RelayError.SCRIPT_FAILED, delivery_uncertain=True)
         if result.accepted:
             # Persist acceptance before module cleanup, which can fail or raise independently.
             self._database.transition(record.message_hash, RelayStatus.CLEANUP_PENDING)

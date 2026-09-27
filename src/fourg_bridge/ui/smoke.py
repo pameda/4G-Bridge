@@ -51,6 +51,9 @@ class PreviewDelegate:
     def relay_enabled(self):
         return False
 
+    def relay_health(self):
+        return "已关闭"
+
     def app_network_state(self):
         return (
             (AppTraffic(0, "Preview App", 12000, 3000, 150000),),
