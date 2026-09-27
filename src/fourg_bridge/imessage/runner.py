@@ -30,6 +30,9 @@ class AppleScriptRunner:
                 input=json.dumps({"target": target, "body": message}, ensure_ascii=False),
                 capture_output=True,
                 text=True,
+                # LaunchServices/embedded Python may retain the C (ASCII) locale.
+                # SMS/JSON is Unicode; never depend on Terminal's locale settings.
+                encoding="utf-8",
                 timeout=self._timeout,
                 check=False,
             )

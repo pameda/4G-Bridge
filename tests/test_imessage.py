@@ -51,6 +51,7 @@ def test_runner_uses_argv_and_maps_denial(tmp_path) -> None:
     arguments = run.call_args.args[0]
     assert arguments[-1] == "send"
     assert "target" not in arguments and "private" not in arguments
+    assert run.call_args.kwargs["encoding"] == "utf-8"
     assert json.loads(run.call_args.kwargs["input"]) == {"target": "target", "body": "private"}
     assert "private" not in script.read_text(encoding="utf-8")
 
@@ -136,3 +137,36 @@ def test_script_has_readonly_check_before_send():
         "send messageText"
     )
     assert "service type is iMessage" in script
+
+
+def test_unicode_bridge_ignores_ascii_default_locale(monkeypatch):
+    from pathlib import Path
+
+    # Exercise real osascript, but the fixture has no Messages or networking calls.
+    monkeypatch.setattr("subprocess._text_encoding", lambda: "ascii")
+    runner = AppleScriptRunner(
+        Path("src/fourg_bridge/imessage/resources/unicode_selftest.applescript")
+    )
+    result = runner.run("fixture@example.invalid", "中文短信 📶")
+    assert result.accepted
+
+
+def test_c_locale_embedded_style_process_preserves_unicode():
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env.update(LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+    source = (
+        "from pathlib import Path; "
+        "from fourg_bridge.imessage.runner import AppleScriptRunner; "
+        "r=AppleScriptRunner(Path('src/fourg_bridge/imessage/resources/'"
+        "'unicode_selftest.applescript')); "
+        "assert r.run('fixture@example.invalid', "
+        "'\\u4e2d\\u6587\\u77ed\\u4fe1 \\U0001f4f6').accepted"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", source], env=env, capture_output=True, timeout=10
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")

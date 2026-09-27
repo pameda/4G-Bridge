@@ -26,6 +26,25 @@ class AppDelegate(AppKit.NSObject):
 
 
 def main() -> None:
+    if "--unicode-selftest" in sys.argv:
+        # Fixed local fixture only: never accepts an external script/recipient/body.
+        import json
+        import locale
+        from importlib import resources
+        from pathlib import Path
+
+        from fourg_bridge.imessage.runner import AppleScriptRunner
+
+        fixture = resources.files("fourg_bridge.imessage.resources").joinpath(
+            "unicode_selftest.applescript"
+        )
+        result = AppleScriptRunner(Path(str(fixture))).run("fixture@example.invalid", "中文短信 📶")
+        print(
+            json.dumps({"passed": result.accepted, "locale": locale.getencoding(), "sent": False})
+        )
+        if not result.accepted:
+            raise SystemExit(1)
+        return
     if "--bridge-check" in sys.argv:
         # Intentionally bypass ApplicationController: no USB, polling, send, or cleanup.
         import json

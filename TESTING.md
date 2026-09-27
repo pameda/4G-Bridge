@@ -1,5 +1,13 @@
 # 测试与实机验收
 
+## 0.1.18 Unicode 子进程通信（2026-09-27）
+
+- 348 项测试通过、1 项 Windows Tk 跳过；Ruff、mypy、打包 UI、签名完整性、DMG 挂载和 SHA-256 通过。
+- 使用应用内 Python 和固定无发送 AppleScript，在 C／US-ASCII 环境中对比：旧实现抛出 UnicodeEncodeError；显式指定 UTF-8 后中文与 Emoji 完整校验通过。
+- 实际打包二进制的 `--unicode-selftest` 同样通过，报告 US-ASCII 环境。固定自检不接受外部脚本或真实目标，不接触 Messages、钥匙串或 USB。
+- 此验证证明编码缺陷已修复，但不能代替真实 iMessage 送达验收；历史不确定记录不自动重发。
+- 默认文本管道编码行为见 [Python 官方 subprocess 文档](https://docs.python.org/3/library/subprocess.html)。
+
 ## 0.1.17 安全诊断增强（2026-09-27）
 
 - 346 项测试通过、1 项 Windows Tk 跳过；Ruff、mypy、打包 AppKit UI、arm64、签名完整性、DMG 只读挂载及 SHA-256 通过。
