@@ -16,6 +16,7 @@ from fourg_bridge.app.login_item import LoginItem
 from fourg_bridge.app.runtime import ModemRuntime
 from fourg_bridge.cellular.data_control import NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
+from fourg_bridge.imessage.diagnostics import relay_diagnostic
 from fourg_bridge.imessage.runner import AppleScriptRunner
 from fourg_bridge.imessage.target import InvalidTarget, normalize_target
 from fourg_bridge.models import (
@@ -847,7 +848,7 @@ class ApplicationController:
                     else RelayResult(False, RelayError.TARGET_UNAVAILABLE)
                 )
                 status = (
-                    "目标已授权，Messages 连接检查通过；未发送消息。"
+                    "目标已授权，本机连接检查通过；尚未验证实际发送与对端送达。"
                     if result.accepted
                     else self._relay_error_message(result)
                 )
@@ -1036,6 +1037,7 @@ class ApplicationController:
 
     def _bridge_finished(self, result: RelayResult, send: bool) -> None:
         self._bridge_busy = False
+        self._events.add_bridge_result(result, send=send)
         if result.accepted:
             self._relay_health = "请求已接受" if send else "连接检查通过"
             self._bridge_status = (
@@ -1045,7 +1047,9 @@ class ApplicationController:
             )
         else:
             self._relay_health = "发送结果不确定" if result.delivery_uncertain else "等待配置"
-            self._bridge_status = self._relay_error_message(result)
+            self._bridge_status = (
+                self._relay_error_message(result) + "\n" + relay_diagnostic(result, send=send)
+            )
         self._settings_window.refresh(False)
         self._show_alert("iMessage 测试" if send else "iMessage 连接检查", self._bridge_status)
 

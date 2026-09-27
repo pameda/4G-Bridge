@@ -3,15 +3,17 @@
 from types import SimpleNamespace
 
 from fourg_bridge.app.controller import ApplicationController
-from fourg_bridge.models import RelayResult, RelayStatus
+from fourg_bridge.models import RelayError, RelayResult, RelayStatus
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.settings import Settings
+from fourg_bridge.support.event_log import EventLog
 
 
 def controller(monkeypatch, tmp_path):
     app = ApplicationController.__new__(ApplicationController)
     app.diagnostic_mode = False
     app._bridge_busy = False
+    app._events = EventLog()
     app._settings = Settings(relay_enabled=True)
     app._database = RelayDatabase(tmp_path / "relay.sqlite")
     app._settings_window = SimpleNamespace(refresh=lambda *args: None)
@@ -68,3 +70,14 @@ def test_manual_failed_retry_preserves_uncertain_messages(monkeypatch, tmp_path)
     assert app._database.get("failed").retry_count == 0
     assert scans == [True]
     assert "不确定" in app.relay_health()
+
+
+def test_uncertain_test_displays_and_keeps_safe_error_code(monkeypatch, tmp_path):
+    app = controller(monkeypatch, tmp_path)
+    app._bridge_finished(
+        RelayResult(False, RelayError.SCRIPT_FAILED, "AppleScript error -10000", True), True
+    )
+    assert "-10000" in app._bridge_status
+    assert "-10000" in app._events.text(True)
+    assert not app._bridge_busy
+    assert "发送结果不确定" in app.relay_health()

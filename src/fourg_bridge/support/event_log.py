@@ -5,6 +5,9 @@ from collections.abc import Mapping
 from datetime import datetime
 from threading import Lock
 
+from fourg_bridge.imessage.diagnostics import relay_diagnostic
+from fourg_bridge.models import RelayResult
+
 EVENTS = {
     "start": ("信息", "系统", "应用已启动"),
     "sleep": ("信息", "系统", "Mac 即将睡眠，执行数据安全关闭"),
@@ -44,6 +47,14 @@ class EventLog:
             return "\n".join(
                 line for level, line in self._rows if not warnings_only or level == "警告"
             )
+
+    def add_bridge_result(self, result: RelayResult, *, send: bool) -> None:
+        """Accept only structured results; formatter drops all free-form/private text."""
+        level = "信息" if result.accepted else "警告"
+        text = relay_diagnostic(result, send=send)
+        line = f"{datetime.now().astimezone():%m-%d %H:%M:%S}  [{level}] [短信] {text}"
+        with self._lock:
+            self._rows.append((level, line))
 
     def clear(self) -> None:
         with self._lock:
