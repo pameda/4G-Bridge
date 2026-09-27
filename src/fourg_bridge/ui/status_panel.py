@@ -5,6 +5,7 @@ from __future__ import annotations
 import AppKit
 import objc
 
+from fourg_bridge import __version__
 from fourg_bridge.models import DataState
 from fourg_bridge.support.presentation import connection_title, format_bytes, operator_name
 from fourg_bridge.ui.app_network import AppNetworkTable
@@ -50,12 +51,19 @@ class StatusPanelController(AppKit.NSViewController):
         self._recent = label("本次运行暂无转发", 11, True)
         self._app_table = AppNetworkTable.alloc().initWithCompact_(True)
         self._app_status = label("打开后开始观测", 11, True)
+        self._version_button = AppKit.NSButton.buttonWithTitle_target_action_(
+            f"v{__version__}", self, "showAbout:"
+        )
+        self._version_button.setBezelStyle_(AppKit.NSBezelStyleInline)
+        self._version_button.setToolTip_("关于 4G Bridge · 查看版本与构建号")
+        self._version_button.setAccessibilityLabel_(f"关于 4G Bridge，版本 {__version__}")
         content = stack(
             [
                 stack(
                     [
                         symbol("antenna.radiowaves.left.and.right", 20),
                         label("4G Bridge", 15, weight=AppKit.NSFontWeightSemibold),
+                        self._version_button,
                     ],
                     True,
                     10,
@@ -126,6 +134,12 @@ class StatusPanelController(AppKit.NSViewController):
         for child in content.arrangedSubviews():
             child.widthAnchor().constraintEqualToAnchor_(content.widthAnchor()).setActive_(True)
         return self
+
+    def showAbout_(self, _sender):
+        from fourg_bridge.ui.about import show_about
+
+        self._popover.performClose_(None)
+        show_about()
 
     @objc.python_method
     def refresh(self, snapshot):

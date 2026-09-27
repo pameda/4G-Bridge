@@ -9,6 +9,7 @@ from pathlib import Path
 import AppKit
 import Foundation
 
+from fourg_bridge import __build__, __version__
 from fourg_bridge.cellular.carrier_query import CarrierUsage
 from fourg_bridge.models import (
     DataState,
@@ -304,6 +305,21 @@ def run(output: Path) -> None:
     assert window.window().title() == "4G Bridge"
     assert window._rescan.title() == "重新检测"
     assert len(window._tabs.tabViewItems()) == 8
+    assert menu._panel._version_button.title() == f"v{__version__}"
+    assert menu._menu.itemWithTitle_("关于 4G Bridge…") is not None
+    preferences = window._tabs.tabViewItems()[4].viewController().view().documentView()
+
+    def texts(view):
+        result = [view.stringValue()] if isinstance(view, AppKit.NSTextField) else []
+        for child in view.subviews():
+            result.extend(texts(child))
+        return result
+
+    assert f"4G Bridge · 版本 {__version__}（构建 {__build__}）" in texts(preferences)
+    metadata = Foundation.NSBundle.mainBundle().infoDictionary()
+    if metadata.get("CFBundleIdentifier") == "com.pameda.fourgbridge":
+        assert metadata["CFBundleShortVersionString"] == __version__
+        assert metadata["CFBundleVersion"] == __build__
     assert window._app_table.table.numberOfRows() == 1
     assert window._login.state() == 0
     assert window._carrier_command.stringValue() == "108"

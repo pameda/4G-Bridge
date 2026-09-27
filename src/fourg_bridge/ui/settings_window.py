@@ -3,7 +3,7 @@ from __future__ import annotations
 import AppKit
 import objc
 
-from fourg_bridge import __version__
+from fourg_bridge import __build__, __version__
 from fourg_bridge.models import DataState, DeviceState
 from fourg_bridge.support.presentation import (
     SpeedHistory,
@@ -612,7 +612,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._appearance.setAccessibilityLabel_("界面外观")
         return page(
             "设置",
-            "为 Mac 而设计，隐私留在本机。",
+            f"4G Bridge · 版本 {__version__}（构建 {__build__}）",
             [
                 group(
                     [
@@ -662,7 +662,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                             11,
                             True,
                         ),
-                        label(f"4G Bridge {__version__} · Apple Silicon · QDC507", 11, True),
+                        self._button("关于 4G Bridge…", "showAbout:"),
                     ]
                 ),
             ],
@@ -883,6 +883,11 @@ class SettingsWindowController(AppKit.NSWindowController):
             self._carrier_number.titleOfSelectedItem(),
             self._carrier_command.stringValue().strip(),
         )
+
+    def showAbout_(self, _sender):
+        from fourg_bridge.ui.about import show_about
+
+        show_about()
 
     @objc.IBAction
     def loginChanged_(self, _sender):

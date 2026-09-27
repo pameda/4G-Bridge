@@ -88,6 +88,7 @@ class MenuBarController(AppKit.NSObject):
         self._add_action("查询运营商流量…", "showCarrier:")
         self._add_action("重新检测模块", "rescan:")
         self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        self._add_action("关于 4G Bridge…", "showAbout:")
         self._add_action("退出 4G Bridge", "quit:", "q")
 
     @objc.python_method
@@ -184,6 +185,13 @@ class MenuBarController(AppKit.NSObject):
     def setRelayStatus_recent_(self, enabled: bool, recent: str | None) -> None:
         self._set("relay", "✓ 已开启" if enabled else "未开启")
         self._set("recent", recent or "—")
+
+    @objc.IBAction
+    def showAbout_(self, _sender):
+        from fourg_bridge.ui.about import show_about
+
+        self._popover.performClose_(None)
+        show_about()
 
     @objc.IBAction
     def showAppNetwork_(self, _sender):

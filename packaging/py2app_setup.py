@@ -2,6 +2,8 @@ from pathlib import Path
 
 from setuptools import setup
 
+from fourg_bridge import __build__, __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 APP = [str(ROOT / "src/fourg_bridge/app/main.py")]
 
@@ -18,8 +20,8 @@ OPTIONS = {
         "CFBundleDisplayName": "4G Bridge",
         "CFBundleIdentifier": "com.pameda.fourgbridge",
         "CFBundleName": "4G Bridge",
-        "CFBundleShortVersionString": "0.1.14",
-        "CFBundleVersion": "15",
+        "CFBundleShortVersionString": __version__,
+        "CFBundleVersion": __build__,
         "LSMinimumSystemVersion": "15.0",
         "LSUIElement": True,
         "NSAppleEventsUsageDescription": (
