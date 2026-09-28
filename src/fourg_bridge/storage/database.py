@@ -120,6 +120,25 @@ class RelayDatabase:
                 f"UPDATE relay SET {','.join(assignments)} WHERE message_hash=?", values
             )
 
+    def retry_unsent(self, message_hash: str) -> bool:
+        """Explicit backfill may reset only definite unsent states, atomically."""
+        if self.blocked:
+            return False
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE relay SET status=?,retry_count=0,next_retry_at=NULL,last_error=NULL,"
+                "updated_at=? WHERE message_hash=? AND status IN (?,?,?)",
+                (
+                    RelayStatus.RETRY,
+                    datetime.now(UTC).isoformat(),
+                    message_hash,
+                    RelayStatus.PENDING,
+                    RelayStatus.RETRY,
+                    RelayStatus.FAILED,
+                ),
+            )
+            return result.rowcount == 1
+
     def claim_send(self, message_hash: str) -> bool:
         """Atomically reserve a due message; concurrent workers must not double-send."""
         now = datetime.now(UTC).isoformat()

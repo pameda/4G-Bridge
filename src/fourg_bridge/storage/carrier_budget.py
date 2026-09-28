@@ -36,17 +36,28 @@ class CarrierBudgetStore:
             columns = {row[1] for row in db.execute("PRAGMA table_info(plan)")}
             if "source" not in columns:
                 db.execute("ALTER TABLE plan ADD COLUMN source TEXT NOT NULL DEFAULT 'carrier'")
+            if "basis" not in columns:
+                db.execute("ALTER TABLE plan ADD COLUMN basis TEXT NOT NULL DEFAULT '运营商套餐'")
+            if "reported_at" not in columns:
+                db.execute("ALTER TABLE plan ADD COLUMN reported_at TEXT NOT NULL DEFAULT ''")
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise sqlite3.DatabaseError("carrier budget integrity")
         path.chmod(0o600)
 
     def update_plan(self, usage: CarrierUsage, *, manual: bool = False) -> None:
         with self._lock, closing(sqlite3.connect(self.path)) as db, db:
-            old_used, stamp, locked = db.execute(
-                "SELECT used,stamp,locked FROM plan WHERE id=1"
+            old_used, stamp, locked, source, reported_at = db.execute(
+                "SELECT used,stamp,locked,source,reported_at FROM plan WHERE id=1"
             ).fetchone()
             if stamp and usage.timestamp <= datetime.fromisoformat(stamp):
                 return
+            if (
+                usage.reported_at
+                and source == "carrier"
+                and stamp
+                and usage.reported_at <= datetime.fromisoformat(reported_at or stamp)
+            ):
+                return  # A delayed notice cannot replace a newer carrier balance.
             new_month = bool(
                 stamp
                 and usage.timestamp.strftime("%Y-%m")
@@ -55,13 +66,16 @@ class CarrierBudgetStore:
             used = usage.used_bytes if new_month or not stamp else max(old_used, usage.used_bytes)
             locked = int((locked and not new_month) or used * 100 >= usage.total_bytes * 98)
             db.execute(
-                "UPDATE plan SET total=?,used=?,stamp=?,locked=?,source=? WHERE id=1",
+                "UPDATE plan SET total=?,used=?,stamp=?,locked=?,source=?,basis=?,reported_at=? "
+                "WHERE id=1",
                 (
                     usage.total_bytes,
                     used,
                     usage.timestamp.isoformat(),
                     locked,
                     "manual" if manual else "carrier",
+                    usage.basis,
+                    usage.reported_at.isoformat() if usage.reported_at else "",
                 ),
             )
 
@@ -112,15 +126,16 @@ class CarrierBudgetStore:
 
     def usage(self) -> CarrierUsage | None:
         with self._lock, closing(sqlite3.connect(self.path)) as db:
-            total, used, stamp, source = db.execute(
-                "SELECT total,used,stamp,source FROM plan WHERE id=1"
+            total, used, stamp, source, basis, reported_at = db.execute(
+                "SELECT total,used,stamp,source,basis,reported_at FROM plan WHERE id=1"
             ).fetchone()
         return (
             CarrierUsage(
                 total,
                 min(used, total),
                 datetime.fromisoformat(stamp),
-                "手动套餐＋本机新增 · 估算" if source == "manual" else "套餐＋本机新增 · 估算",
+                "手动套餐＋本机新增 · 估算" if source == "manual" else basis + "＋本机新增 · 估算",
+                datetime.fromisoformat(reported_at) if reported_at else None,
             )
             if total and stamp
             else None

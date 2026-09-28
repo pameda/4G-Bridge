@@ -27,6 +27,7 @@ from fourg_bridge.ui.components import (
     symbol,
 )
 from fourg_bridge.ui.navigation import NavigationTabs, Sidebar
+from fourg_bridge.ui.sms_inbox import SMSInboxView
 from fourg_bridge.ui.speed_test import SpeedTestPage
 from fourg_bridge.ui.usage_ring import UsageRing, usage_color
 
@@ -268,6 +269,12 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def _relay_page(self):
+        self._inbox = SMSInboxView.alloc().init()
+        self._backfill_button = self._button("补转发未发送…", "backfillUnsent:")
+        inbox_card = group([self._inbox.view, self._backfill_button])
+        self._inbox.view.widthAnchor().constraintEqualToAnchor_constant_(
+            inbox_card.contentView().widthAnchor(), -40
+        ).setActive_(True)
         self._enabled = AppKit.NSSwitch.alloc().init()
         self._enabled.setTarget_(self)
         self._enabled.setAction_("relayChanged:")
@@ -286,8 +293,9 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._authorize_button = self._button("授权读取目标", "authorizeTarget:")
         return page(
             "短信转发",
-            "短信进入“信息”，正文不留在这里。",
+            "查看收到的短信，并通过 iMessage 自动转发。",
             [
+                inbox_card,
                 group(
                     [
                         stack(
@@ -820,11 +828,18 @@ class SettingsWindowController(AppKit.NSWindowController):
             else "4G 上限：等待运营商套餐总量"
         )
         self._enabled.setState_(int(self._delegate.relay_enabled()))
+        self._inbox.update(self._delegate.received_sms())
         self._enabled.setEnabled_(not getattr(self._delegate, "diagnostic_mode", False))
         if include_target:
             self._loaded_target = self._delegate.relay_target() or ""
             self._target.setStringValue_(self._loaded_target)
         busy, bridge_status = self._delegate.bridge_status()
+        self._backfill_button.setEnabled_(
+            not busy
+            and not diagnostic
+            and self._delegate.relay_enabled()
+            and any(row.can_backfill for row in self._delegate.received_sms())
+        )
         self._relay_health.setStringValue_(self._delegate.relay_health())
         self._save_target_button.setEnabled_(not busy)
         self._target.setEnabled_(not busy)
@@ -1078,6 +1093,15 @@ class SettingsWindowController(AppKit.NSWindowController):
             "发送 iMessage 测试？", "将向已保存的目标发送一条测试消息。不会通过 SIM 发送短信。"
         ):
             self._delegate.send_test_message()
+
+    @objc.IBAction
+    def backfillUnsent_(self, _sender):
+        if self._target_saved() and self._confirm(
+            "补转发明确未发送的短信？",
+            "向已保存的 iMessage 目标补转发本次列表中的未发送、等待重试或失败短信。\n"
+            "已接受、正在发送和发送结果待核对的记录不会重发；已删除原文无法恢复。",
+        ):
+            self._delegate.backfill_unsent_sms()
 
     @objc.IBAction
     def retryFailed_(self, _sender):

@@ -26,11 +26,30 @@ class FakeRunner:
 
 
 def test_formatter() -> None:
-    result = format_relay("10086", datetime(2026, 9, 23, 15, 28, tzinfo=UTC), "剩余18GB 📶")
-    assert result.startswith("【4G短信】")
-    assert "来自：10086" in result
-    assert result.endswith("剩余18GB 📶")
+    stamp = datetime(2026, 9, 23, 15, 28, tzinfo=UTC)
+    result = format_relay("10086", stamp, "剩余18GB 📶")
+    local_time = stamp.astimezone().strftime("%Y-%m-%d %H:%M")
+    assert result == f"剩余18GB 📶\n\n来自：10086\n时间：{local_time}"
     assert format_test_message() == "【4G Bridge】\niMessage 转发测试成功。"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "第一段\n\n第二段\n",
+        " English 123\r\n中文🙂👨‍👩‍👧‍👦\t ",
+        "正文含来自：和时间：，保留不变。",
+        "中文与 Emoji 📶 " * 500,
+        "",
+    ],
+)
+def test_body_first_footer_last_without_trimming_or_truncation(body):
+    stamp = datetime(2026, 9, 23, 15, 28, tzinfo=UTC)
+    runner = FakeRunner()
+    assert MessagesBridge(runner, Target()).relay("10086", stamp, body).accepted
+    text = runner.args[1]
+    assert text[: len(body)] == body
+    assert text[len(body) :] == (f"\n\n来自：10086\n时间：{stamp.astimezone():%Y-%m-%d %H:%M}")
 
 
 def test_bridge_passes_body_as_argument_not_script(tmp_path) -> None:

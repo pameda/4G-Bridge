@@ -119,10 +119,13 @@ def test_percentage_unknown_not_invented(body):
 def test_query_reply_parsed_without_relay_or_deletion(monkeypatch):
     from fourg_bridge.app.runtime import ModemRuntime
     from fourg_bridge.models import AssembledSMS
+    from fourg_bridge.sms.inbox import SMSInbox
 
     now = datetime.now(UTC)
     message = AssembledSMS("10001", now, "总流量60GB，已使用12GB，剩余流量48GB", (), ())
     runtime = ModemRuntime.__new__(ModemRuntime)
+    runtime.inbox = SMSInbox()
+    runtime._database = SimpleNamespace(get=lambda key: None)
     runtime._receiver = SimpleNamespace(poll=lambda: (object(),), identity="test", sim_key="sim")
     runtime._sms_identity = ("test", "sim")
     runtime._assembler = SimpleNamespace(add=lambda part: message)
@@ -134,6 +137,7 @@ def test_query_reply_parsed_without_relay_or_deletion(monkeypatch):
     assert runtime.carrier_usage.fraction == 0.2
     assert runtime.carrier_reply_received
     assert not runtime.carrier_pending
+    assert runtime.inbox.snapshot()[0].body == message.body
 
 
 def test_pending_query_does_not_send_again():

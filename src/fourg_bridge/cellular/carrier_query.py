@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from fourg_bridge.models import ATResponse
 
@@ -32,6 +33,7 @@ class CarrierUsage:
     used_bytes: int
     timestamp: datetime
     basis: str = "运营商套餐"
+    reported_at: datetime | None = None
 
     @property
     def fraction(self) -> float:
@@ -53,6 +55,9 @@ def parse_usage(sender: str, body: str, timestamp: datetime) -> CarrierUsage | N
     """Only a single explicit total/used pair; never combine overlapping packages."""
     if sender not in ("10001", "10086", "10010"):
         return None
+    notice = parse_unicom_notice(sender, body, timestamp)
+    if notice:
+        return notice
     buckets = parse_telecom_buckets(sender, body, timestamp)
     if buckets:
         return buckets
@@ -88,6 +93,54 @@ def parse_usage(sender: str, body: str, timestamp: datetime) -> CarrierUsage | N
     ):
         return None
     return CarrierUsage(total, consumed, timestamp)
+
+
+def parse_unicom_notice(sender: str, body: str, timestamp: datetime) -> CarrierUsage | None:
+    """Recognize one dated domestic-general balance, not overlapping data packages.
+
+    The SCTS remains the update/freshness timestamp. The earlier billing cutoff is
+    retained in the generated basis. No SMS text is retained by the quota store.
+    A service number is not cryptographic sender authentication.
+    """
+    if (
+        sender != "10010"
+        or timestamp.tzinfo is None
+        or not body.startswith("【流量提醒】")
+        or not body.rstrip().endswith("【中国联通】")
+        or any(word in body for word in ("定向", "夜间", "闲时", "结转", "加油包", "省内"))
+    ):
+        return None
+    quantity = r"([0-9]{1,9}(?:\.[0-9]{1,6})?)\s*(GB|MB|KB)"
+    pattern = (
+        r"截至\s*(\d{1,2})月(\d{1,2})日(\d{1,2})时[，,]\s*"
+        r"您当月(共享)?国内通用流量已用\s*" + quantity + r"[，,]\s*剩余\s*" + quantity
+    )
+    matches = list(re.finditer(pattern, body, re.I))
+    if len(matches) != 1 or len(re.findall(quantity, body, re.I)) != 2:
+        return None
+    month, day, hour, shared, used, unit, remaining, rest_unit = matches[0].groups()
+    received = timestamp.astimezone(ZoneInfo("Asia/Shanghai"))
+    try:
+        if int(hour) > 24:
+            return None
+        date = received.replace(
+            month=int(month), day=int(day), hour=0, minute=0, second=0, microsecond=0
+        )
+        cutoff = date + timedelta(hours=int(hour))
+    except ValueError:
+        return None
+    if date.month != received.month or not timedelta(0) <= received - cutoff <= timedelta(hours=36):
+        return None  # Never use a previous month's balance or a future/very old report.
+    factors = {"KB": 1024, "MB": 1024**2, "GB": 1024**3}
+    consumed = Decimal(used) * factors[unit.upper()]
+    left = Decimal(remaining) * factors[rest_unit.upper()]
+    total = int(consumed + left)
+    if total <= 0:
+        return None
+    scope = "联通共享通用" if shared else "联通国内通用"
+    return CarrierUsage(
+        total, int(consumed), timestamp, f"{scope} · 截至{cutoff:%m-%d %H:%M}", cutoff
+    )
 
 
 def parse_telecom_buckets(sender: str, body: str, timestamp: datetime) -> CarrierUsage | None:

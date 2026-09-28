@@ -12,17 +12,20 @@ import Foundation
 from fourg_bridge import __build__, __version__
 from fourg_bridge.cellular.carrier_query import CarrierUsage
 from fourg_bridge.models import (
+    AssembledSMS,
     DataState,
     DeviceDescriptor,
     DeviceState,
     ModemSnapshot,
     RegistrationState,
+    RelayStatus,
     SIMState,
     TrafficSnapshot,
 )
 from fourg_bridge.network.app_traffic import AppTraffic
 from fourg_bridge.network.speed_test import SpeedState
 from fourg_bridge.network.traffic import TrafficUsage
+from fourg_bridge.sms.inbox import SMSInbox
 from fourg_bridge.storage.settings import Settings
 from fourg_bridge.ui.badge_preview import render_badge_preview
 from fourg_bridge.ui.menu_bar import MenuBarController
@@ -48,6 +51,25 @@ class PreviewDelegate:
         self.sample = None
         self.usage = TrafficUsage()
         self._appearance = "system"
+        self.inbox = SMSInbox()
+        self.inbox.bind(("preview-device", "preview-sim"))
+        self.inbox.add(
+            AssembledSMS(
+                "演示服务号",
+                datetime.now().astimezone(),
+                "这是界面测试短信，不是真实用户内容。\n中文、English 和 Emoji 📶 均可查看。\n"
+                + "长短信内容会自动换行，可滚动查看和选择复制。\n" * 12,
+                ("preview-only",),
+                (),
+            )
+        )
+        self.inbox.set_status(self.inbox.snapshot()[0].message_hash, RelayStatus.SENT)
+
+    def received_sms(self):
+        return self.inbox.snapshot()
+
+    def backfill_unsent_sms(self):
+        self.backfill_requested = True
 
     def relay_enabled(self):
         return False
@@ -292,6 +314,80 @@ def run(output: Path) -> None:
     assert window._target.stringValue() == "unsaved target"
     window.showRelay_(None)
     assert window._tabs.selectedTabViewItemIndex() == 2
+    inbox = window._inbox
+    assert len(inbox.rows) == 1
+    assert "Emoji 📶" in inbox.detail.string()
+    assert not inbox.detail.isEditable() and inbox.detail.isSelectable()
+    assert inbox.detail.enclosingScrollView().contentView().bounds().origin.x == 0
+    # A single long paragraph exposed the old width-tracking bug: explicit
+    # newlines alone do not prove that real SMS bodies wrap or remain reachable.
+    long_body = "连续中文短信与 Emoji 📶 English " * 120 + "完整正文结束标记"
+    delegate.inbox.add(
+        AssembledSMS(
+            "模拟发件人",
+            datetime.now().astimezone() + timedelta(seconds=1),
+            long_body,
+            ("long-unbroken-preview",),
+            (),
+        )
+    )
+    inbox.update(delegate.received_sms())
+    inbox.table.selectRowIndexes_byExtendingSelection_(
+        Foundation.NSIndexSet.indexSetWithIndex_(0), False
+    )
+    for width in (1000, 1280):
+        window.window().setContentSize_(AppKit.NSMakeSize(width, 760))
+        window.window().contentView().layoutSubtreeIfNeeded()
+        scroll = inbox.detail.enclosingScrollView()
+        scroll.tile()
+        container = inbox.detail.textContainer()
+        manager = inbox.detail.layoutManager()
+        manager.ensureLayoutForTextContainer_(container)
+        used = manager.usedRectForTextContainer_(container)
+        assert used.size.width <= scroll.contentSize().width
+        assert used.size.height > 240
+        assert abs(inbox.detail.frame().size.width - scroll.contentSize().width) < 1
+        assert manager.glyphRangeForTextContainer_(container).length == manager.numberOfGlyphs()
+        assert inbox.detail.string() == long_body
+        scroll.contentView().scrollToPoint_(AppKit.NSMakePoint(0, 0))
+        content = window.window().contentView()
+        bitmap = content.bitmapImageRepForCachingDisplayInRect_(content.bounds())
+        content.cacheDisplayInRect_toBitmapImageRep_(content.bounds(), bitmap)
+        bitmap.representationUsingType_properties_(
+            AppKit.NSBitmapImageFileTypePNG, {}
+        ).writeToFile_atomically_(str(output / f"sms-wrap-{width}.png"), True)
+        inbox.detail.scrollRangeToVisible_((inbox.detail.textStorage().length() - 1, 1))
+        assert scroll.contentView().bounds().origin.y > 0
+        assert scroll.contentView().bounds().origin.x == 0
+        window.refresh(False)
+        assert scroll.contentView().bounds().origin.y > 0  # No jump on polling.
+    window.window().setContentSize_(AppKit.NSMakeSize(1040, 760))
+    # Native action routing with confirmation stub, no live relay or Keychain.
+    loaded = window._target.stringValue()
+    window._target.setStringValue_(getattr(window, "_loaded_target", ""))
+    window._confirm = lambda *args: True
+    window.backfillUnsent_(None)
+    assert delegate.backfill_requested
+    window._target.setStringValue_(loaded)
+    assert inbox.view.frame().size.width > 600
+    for column in range(4):
+        cell = inbox.table.viewAtColumn_row_makeIfNecessary_(column, 0, True)
+        point = cell.convertPoint_toView_(AppKit.NSMakePoint(10, 10), inbox.table.superview())
+        assert inbox.table.hitTest_(point) == inbox.table
+    inbox.detail.setSelectedRange_((0, 3))
+    window.refresh(False)
+    assert inbox.detail.selectedRange().length == 3
+    inbox.search.setStringValue_("不存在的内容")
+    inbox.controlTextDidChange_(None)
+    assert not inbox.rows and inbox.detail.string() == ""
+    inbox.search.setStringValue_("emoji")
+    inbox.controlTextDidChange_(None)
+    assert len(inbox.rows) == 2
+    inbox.search.setStringValue_("")
+    inbox.controlTextDidChange_(None)
+    delegate.inbox.bind(("preview-device", "another-sim"))
+    window.refresh(False)
+    assert not inbox.rows and inbox.detail.string() == ""
     window._appearance.setSelectedSegment_(2)
     window.appearanceChanged_(None)
     assert delegate.appearance() == "dark"

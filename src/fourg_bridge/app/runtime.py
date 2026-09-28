@@ -8,11 +8,13 @@ from datetime import datetime, timedelta
 
 from fourg_bridge.cellular.carrier_query import (
     parse_allowance,
+    parse_unicom_notice,
     parse_usage,
     query_response_issue,
     send_query,
 )
 from fourg_bridge.cellular.data_control import ModemAttachControl, NetworkSetupControl
+from fourg_bridge.cellular.operator_profile import UNICOM, operator_profile
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.models import DataState, ModemSnapshot, RelayStatus, SIMState
 from fourg_bridge.modem.controller import ModemController
@@ -22,13 +24,14 @@ from fourg_bridge.network.data_session import DataSessionManager, DataTransition
 from fourg_bridge.network.ecm import ECMDetector
 from fourg_bridge.network.traffic import TrafficLedger, TrafficMonitor, TrafficUsage
 from fourg_bridge.sms.assembler import SMSAssembler
+from fourg_bridge.sms.inbox import SMSInbox
 from fourg_bridge.sms.pdu_decoder import PDUDecodeError, decode_pdu
 from fourg_bridge.sms.receiver import SMSReceiver
 from fourg_bridge.sms.relay import SMSRelay
 from fourg_bridge.storage.auto_query import matches_profile
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.identity import IdentityStore
-from fourg_bridge.support.privacy import redact_identifier
+from fourg_bridge.support.privacy import redact_identifier, stable_message_hash
 
 
 class ModemRuntime:
@@ -37,6 +40,7 @@ class ModemRuntime:
         discovery: USBDiscovery,
         database: RelayDatabase,
         bridge: MessagesBridge,
+        inbox: SMSInbox | None = None,
     ) -> None:
         descriptor = discovery.discover()
         if descriptor is None:
@@ -44,6 +48,7 @@ class ModemRuntime:
         self._discovery = discovery
         self._database = database
         self._bridge = bridge
+        self.inbox = inbox if inbox is not None else SMSInbox()
         self._enable_cancelled = False
         self.carrier_allowance = None
         self.carrier_usage = None
@@ -164,11 +169,13 @@ class ModemRuntime:
 
     def poll_sms(self, *, relay_enabled: bool = True) -> str | None:
         recent: str | None = None
+        self._last_sms_hashes = set()
         relay_enabled = relay_enabled and not self._database.blocked
         if relay_enabled:
             self._relay.retry_cleanup()
         parts = self._receiver.poll()
         identity = (self._receiver.identity, self._receiver.sim_key)
+        self.inbox.bind(identity)
         if self._sms_identity != identity:
             self._assembler = SMSAssembler()
             self.carrier_usage = None
@@ -190,7 +197,14 @@ class ModemRuntime:
             message = self._assembler.add(part)
             if message is None:
                 continue
-            if (
+            self.inbox.add(message)
+            self._last_sms_hashes.add(
+                stable_message_hash(
+                    message.sender, message.timestamp.isoformat(), message.ordered_pdus
+                )
+            )
+            notice_applied = self._accept_carrier_notice(message)
+            if not notice_applied and (
                 message.sender in ("10001", "10086", "10010")
                 and getattr(self, "_carrier_requested_at", None) is not None
                 and getattr(self, "_carrier_query_sim", None) == self._receiver.sim_key
@@ -230,8 +244,54 @@ class ModemRuntime:
             if record.status in (RelayStatus.SENT, RelayStatus.CLEANUP_PENDING):
                 time = datetime.fromisoformat(record.timestamp).astimezone().strftime("%H:%M")
                 recent = f"{time} / {redact_identifier(record.sender)}"
+        for entry in self.inbox.snapshot():
+            record = self._database.get(entry.message_hash)
+            if record:
+                self.inbox.set_status(entry.message_hash, record.status)
         self.carrier_cache_pending = False
         return recent
+
+    def _accept_carrier_notice(self, message):
+        """Accept unsolicited usage notices only for a verified current home SIM."""
+        usage = parse_unicom_notice(message.sender, message.body, message.timestamp)
+        if not usage or not self._receiver.sim_key:
+            return False
+        age = datetime.now().astimezone() - message.timestamp
+        cached = getattr(self, "_carrier_cache_at", None)
+        if not timedelta(0) <= age <= timedelta(hours=6) or (cached and usage.timestamp <= cached):
+            return False
+        try:
+            snapshot = self._controller.snapshot()  # AT only; independent of ECM/Wi-Fi.
+            key = IdentityStore(self._database.path.parent).sim(snapshot.iccid)
+            if key != self._receiver.sim_key or operator_profile(snapshot) != UNICOM:
+                return False
+        except Exception:
+            return False  # A failed status query must not interrupt ordinary SMS relay.
+        self.carrier_usage = usage
+        self.carrier_allowance = parse_allowance(message.sender, message.body, message.timestamp)
+        self.carrier_sim_key = key
+        self.carrier_reply_received = True
+        self.carrier_problem = ""
+        self._carrier_cache_at = message.timestamp
+        self._carrier_deadline = 0
+        return True
+
+    def prepare_backfill(self, keys, identity):
+        """Re-read current SIM first; never resurrect messages from memory alone."""
+        if self._database.blocked or not identity or not all(identity):
+            return 0
+        self.poll_sms(relay_enabled=False)
+        if self._sms_identity != identity:
+            return 0
+        queued = 0
+        for key in set(keys) & self._last_sms_hashes:
+            record = self._database.get(key)
+            if record is None:
+                queued += 1  # Normal polling creates its first pending record.
+            elif self._database.retry_unsent(key):
+                self.inbox.set_status(key, RelayStatus.RETRY)
+                queued += 1
+        return queued
 
     def set_data(
         self, enabled: bool, user_confirmed: bool = False, *, automatic: bool = False

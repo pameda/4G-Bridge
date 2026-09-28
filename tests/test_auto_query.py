@@ -251,7 +251,10 @@ def test_failed_submit_not_retried_after_restart(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("same_sim", [True, False])
 def test_reply_poll_identity_change_resets_only_old_query(same_sim):
+    from fourg_bridge.sms.inbox import SMSInbox
+
     runtime = ModemRuntime.__new__(ModemRuntime)
+    runtime.inbox = SMSInbox()
     runtime._receiver = SimpleNamespace(poll=lambda: (), identity="new", sim_key="b")
     runtime._sms_identity = ("old", "a")
     runtime._carrier_query_sim = "b" if same_sim else "a"

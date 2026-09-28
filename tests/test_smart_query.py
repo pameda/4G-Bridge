@@ -219,9 +219,12 @@ def test_smart_query_does_not_enable_data_directly_or_override_manual_disable(
 def test_reply_cannot_cross_sim_or_query_boundary(tmp_path, monkeypatch, kind):
     from fourg_bridge.app.runtime import ModemRuntime
     from fourg_bridge.models import AssembledSMS
+    from fourg_bridge.sms.inbox import SMSInbox
 
     now = datetime.now(UTC)
     runtime = ModemRuntime.__new__(ModemRuntime)
+    runtime.inbox = SMSInbox()
+    runtime._database = SimpleNamespace(get=lambda key: None)
     runtime._receiver = SimpleNamespace(poll=lambda: (object(),), identity="test", sim_key="new")
     runtime._sms_identity = ("test", "new")
     runtime._carrier_requested_at = None if kind == "unsolicited" else now

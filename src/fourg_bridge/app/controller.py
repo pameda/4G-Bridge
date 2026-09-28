@@ -34,6 +34,7 @@ from fourg_bridge.modem.usb_discovery import USBDiscovery
 from fourg_bridge.network.app_traffic import AppTrafficTracker, read_counters
 from fourg_bridge.network.failover import Action
 from fourg_bridge.network.traffic import TrafficLedger
+from fourg_bridge.sms.inbox import SMSInbox
 from fourg_bridge.storage.auto_query import AutoQueryLedger, matches_profile
 from fourg_bridge.storage.budget import BudgetStore
 from fourg_bridge.storage.database import RelayDatabase
@@ -67,6 +68,7 @@ class ApplicationController:
         self._traffic_usage = self._traffic_ledger.usage()
         self._speed_test = SpeedTestController(self)
         self._recent_relay = None
+        self._sms_inbox = SMSInbox()
         self._bridge_busy = False
         self._bridge_status = "尚未检查 iMessage；连接检查不会发送消息。"
         self._relay_health = "尚未检查"
@@ -676,7 +678,9 @@ class ApplicationController:
                     snapshot = ModemSnapshot(device_state=DeviceState.MISSING)
                 else:
                     if self._runtime is None:
-                        self._runtime = ModemRuntime(self._discovery, self._database, self._bridge)
+                        self._runtime = ModemRuntime(
+                            self._discovery, self._database, self._bridge, self._sms_inbox
+                        )
                     # SMS relay has no data-state, default-interface, Wi-Fi,
                     # failover or quota gate. Messages uses the Mac's network.
                     relay_ready = False
@@ -686,14 +690,11 @@ class ApplicationController:
                             relay_ready = True
                         else:
                             AppHelper.callAfter(self._relay_waiting, prerequisite)
-                    if (
-                        relay_ready
-                        or getattr(self._runtime, "carrier_pending", False)
-                        or getattr(self._runtime, "carrier_cache_pending", False)
-                    ):
-                        recent = self._runtime.poll_sms(relay_enabled=relay_ready)
-                        if recent:
-                            AppHelper.callAfter(self._apply_recent_relay, recent)
+                    # Receiving/viewing must work even when forwarding is off or
+                    # Keychain is unavailable. Only relay_ready permits send/cleanup.
+                    recent = self._runtime.poll_sms(relay_enabled=relay_ready)
+                    if recent:
+                        AppHelper.callAfter(self._apply_recent_relay, recent)
                     snapshot = self._runtime.snapshot()
                     AppHelper.callAfter(
                         self._apply_traffic,
@@ -809,6 +810,9 @@ class ApplicationController:
 
     def recent_relay(self) -> str | None:
         return self._recent_relay
+
+    def received_sms(self):
+        return self._sms_inbox.snapshot()
 
     def appearance(self) -> str:
         return self._settings.appearance
@@ -1166,6 +1170,54 @@ class ApplicationController:
         self._show_alert(
             "已重试失败项", f"{len(records)} 项将在模块短信重新读取后重试。发送不确定项未更改。"
         )
+
+    def backfill_unsent_sms(self) -> None:
+        if self._bridge_busy:
+            return
+        if not self.relay_enabled():
+            self._show_alert("暂不能补转发", "请先开启 iMessage 转发；测试模式不处理模块短信。")
+            return
+        keys = tuple(row.message_hash for row in self.received_sms() if row.can_backfill)
+        identity = self._sms_inbox.identity
+        if not keys:
+            self._show_alert(
+                "无需补转发", "当前没有明确未发送的短信。已接受及发送不确定项不会重发。"
+            )
+            return
+        self._bridge_busy = True
+        self._bridge_status = "正在核对模块短信与转发目标…"
+        self._settings_window.refresh(False)
+
+        def worker():
+            detail = "模块未连接，未补转发。"
+            queued = 0
+            try:
+                with self._runtime_lock:
+                    prerequisite = self._bridge.target_status()
+                    if not self.relay_enabled():
+                        detail = "转发已关闭，未补转发。"
+                    elif not prerequisite.accepted:
+                        detail = self._relay_error_message(prerequisite)
+                    elif self._runtime is not None:
+                        queued = self._runtime.prepare_backfill(keys, identity)
+                        detail = (
+                            f"{queued} 条已排入补转发队列，将重新读取模块后发送。"
+                            if queued
+                            else "没有可补转发的短信：可能已处理、SIM 变化或原文不在模块中。"
+                        )
+            except Exception:
+                detail = "读取模块或转发队列失败，未强制重发；请稍后再试。"
+            AppHelper.callAfter(self._backfill_finished, detail, queued)
+
+        threading.Thread(target=worker, name="SMS-Backfill", daemon=True).start()
+
+    def _backfill_finished(self, detail, queued):
+        self._bridge_busy = False
+        self._bridge_status = detail
+        self._settings_window.refresh(False)
+        if queued:
+            self.rescan()
+        self._show_alert("补转发未发送短信", detail + "\n已接受及发送不确定项未更改。")
 
     def confirm_delivery_unknown(self) -> None:
         records = self._database.records_with_status(RelayStatus.DELIVERY_UNKNOWN)

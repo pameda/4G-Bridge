@@ -21,6 +21,7 @@ from fourg_bridge.models import (
     RelayStatus,
 )
 from fourg_bridge.sms.assembler import SMSAssembler
+from fourg_bridge.sms.inbox import SMSInbox
 from fourg_bridge.sms.receiver import CleanupResult
 from fourg_bridge.sms.relay import SMSRelay
 from fourg_bridge.storage.database import RelayDatabase
@@ -49,6 +50,7 @@ def test_pdu_relay_with_cellular_data_off(tmp_path):
         delete_verified=lambda proofs: (deleted.append(proofs) or CleanupResult.DELETED),
     )
     runtime = ModemRuntime.__new__(ModemRuntime)
+    runtime.inbox = SMSInbox()
     runtime._database = database
     runtime._sms_identity = ("test", "sim")
     runtime._data = SimpleNamespace(state=DataState.OFF)
@@ -62,6 +64,9 @@ def test_pdu_relay_with_cellular_data_off(tmp_path):
     runtime.poll_sms()
     assert len(calls) == 1  # Re-reading the module must not resend.
     assert runtime._data.state == DataState.OFF
+    assert len(runtime.inbox.snapshot()) == 1
+    assert runtime.inbox.snapshot()[0].body == "Wi-Fi 转发 📶"
+    assert runtime.inbox.snapshot()[0].status == RelayStatus.SENT
 
 
 def test_diagnostic_ui_never_scans_or_starts_sms_queue():
@@ -111,7 +116,7 @@ def test_controller_polls_sms_before_network_status_even_without_4g(monkeypatch,
         SimpleNamespace(sharedWorkspace=lambda: SimpleNamespace(runningApplications=lambda: [])),
     )
     app._rescan_worker()
-    assert calls == (["sms", "status"] if target_ready else ["status"])
+    assert calls == ["sms", "status"]  # Viewing does not require a relay target.
     assert not app._rescan_lock.locked()
 
 
