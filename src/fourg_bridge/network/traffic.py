@@ -112,6 +112,19 @@ class TrafficLedger:
         month = self._get(current.strftime("month:%Y-%m"))
         return TrafficUsage(day[0], day[1], month[0], month[1])
 
+    def months(self, when: datetime | None = None) -> tuple[tuple[str, int, int], ...]:
+        """Local calendar months; all modem SIMs combined, never carrier billing."""
+        current = (when or datetime.now().astimezone()).strftime("month:%Y-%m")
+        with closing(sqlite3.connect(self._path)) as db:
+            rows = db.execute(
+                "SELECT period,rx_bytes,tx_bytes FROM usage "
+                "WHERE period LIKE 'month:%' AND period<=? ORDER BY period DESC LIMIT 12",
+                (current,),
+            ).fetchall()
+        if not rows or rows[0][0] != current:
+            rows.insert(0, (current, 0, 0))
+        return tuple((period[6:], int(rx), int(tx)) for period, rx, tx in rows[:12])
+
     def _increment(self, period: str, rx_delta: int, tx_delta: int) -> None:
         with closing(sqlite3.connect(self._path)) as connection, connection:
             connection.execute(

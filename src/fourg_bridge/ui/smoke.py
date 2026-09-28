@@ -21,6 +21,7 @@ from fourg_bridge.models import (
     TrafficSnapshot,
 )
 from fourg_bridge.network.app_traffic import AppTraffic
+from fourg_bridge.network.speed_test import SpeedState
 from fourg_bridge.network.traffic import TrafficUsage
 from fourg_bridge.storage.settings import Settings
 from fourg_bridge.ui.badge_preview import render_badge_preview
@@ -50,6 +51,18 @@ class PreviewDelegate:
 
     def relay_enabled(self):
         return False
+
+    def speed_test_state(self):
+        return getattr(self, "speed", SpeedState())
+
+    def start_speed_test(self, mode, profile):
+        self.speed_request = (mode, profile)
+
+    def stop_speed_test(self):
+        self.speed_stopped = True
+
+    def monthly_traffic(self):
+        return (("2026-09", 2 * 1024**3, 1024**3), ("2026-08", 4 * 1024**3, 0))
 
     def relay_health(self):
         return "已关闭"
@@ -189,7 +202,7 @@ def run(output: Path) -> None:
                 AppKit.NSBitmapImageFileTypePNG, {}
             ).writeToFile_atomically_(str(output / f"{appearance}-menubar-{state.value}.png"), True)
         menu.update_(delegate.snapshot)
-        for index in range(8):
+        for index in range(len(DESTINATIONS)):
             window._tabs.setSelectedTabViewItemIndex_(index)
             assert DESTINATIONS[window._sidebar.table.selectedRow()][0] == index
             Foundation.NSRunLoop.currentRunLoop().runUntilDate_(
@@ -256,7 +269,7 @@ def run(output: Path) -> None:
         assert window._sidebar.table.selectedRowIndexes().count() == 1
     for width, height in ((1000, 700), (1280, 820)):
         window.window().setContentSize_(AppKit.NSMakeSize(width, height))
-        for index in range(8):
+        for index in range(len(DESTINATIONS)):
             window._tabs.setSelectedTabViewItemIndex_(index)
             window.window().contentView().layoutSubtreeIfNeeded()
             scroll = window._tabs.tabViewItems()[index].viewController().view()
@@ -319,7 +332,19 @@ def run(output: Path) -> None:
     menu.update_(delegate.snapshot)
     assert window.window().title() == "4G Bridge"
     assert window._rescan.title() == "重新检测"
-    assert len(window._tabs.tabViewItems()) == 8
+    assert len(window._tabs.tabViewItems()) == 9
+    window._speed_page.startTest_(None)
+    assert delegate.speed_request == ("wifi", 0)
+    for phase in ("latency", "download", "upload", "complete", "cancelled", "failed"):
+        delegate.speed = SpeedState(
+            phase=phase, download_mbps=42.5, upload_mbps=12.4, latency_ms=35.8, progress=0.5
+        )
+        window.refresh(False)
+        assert window._speed_page.start.isEnabled() == (not delegate.speed.running)
+        assert window._speed_page.stop.isEnabled() == delegate.speed.running
+        assert window._speed_page.metrics["download_mbps"].stringValue() == "42.5"
+    window._speed_page.stopTest_(None)
+    assert delegate.speed_stopped
     assert menu._panel._version_button.title() == f"v{__version__}"
     assert menu._menu.itemWithTitle_("关于 4G Bridge…") is not None
     preferences = window._tabs.tabViewItems()[4].viewController().view().documentView()
@@ -356,8 +381,18 @@ def run(output: Path) -> None:
     assert window._carrier_ring.value.stringValue() == "20.0%"
     assert "60.0 GB" in window._budget_usage.stringValue()
     assert not hasattr(window, "_data_limit")
+    # A pending delivery is a detail, not the switch status in the quick panel.
+    delegate.relay_health = lambda: "有发送不确定项 · 待核对"
+    for enabled, title in ((True, "已开启"), (False, "已关闭")):
+        delegate.relay_enabled = lambda value=enabled: value
+        window.refresh(False)
+        menu.update_(delegate.snapshot)
+        menu._panel.refresh(delegate.snapshot)
+        assert menu._panel._relay.stringValue() == title
+        assert window._overview_relay.stringValue() == title
+        assert window._relay_health.stringValue() == "有发送不确定项 · 待核对"
     print(
-        "UI_SMOKE_OK: sidebar, eight pages, light/dark, resizing, states and safe interactions",
+        "UI_SMOKE_OK: sidebar, nine pages, light/dark, resizing, states and safe interactions",
         flush=True,
     )
     window.window().orderOut_(None)

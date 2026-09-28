@@ -10,6 +10,7 @@ from fourg_bridge.support.presentation import (
     connection_title,
     format_bytes,
     operator_name,
+    relay_switch_label,
     route_description,
     usage_style,
 )
@@ -26,6 +27,7 @@ from fourg_bridge.ui.components import (
     symbol,
 )
 from fourg_bridge.ui.navigation import NavigationTabs, Sidebar
+from fourg_bridge.ui.speed_test import SpeedTestPage
 from fourg_bridge.ui.usage_ring import UsageRing, usage_color
 
 
@@ -54,6 +56,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._tabs.setTabStyle_(AppKit.NSTabViewControllerTabStyleUnspecified)
         self._tabs.tabView().setTabViewType_(AppKit.NSNoTabsNoBorder)
         self._tabs.setTransitionOptions_(0)
+        self._speed_page = SpeedTestPage.alloc().initWithDelegate_(delegate)
         for title, icon, view in (
             ("总览", "square.grid.2x2", self._overview_page()),
             ("流量", "chart.xyaxis.line", self._traffic_page()),
@@ -63,6 +66,7 @@ class SettingsWindowController(AppKit.NSWindowController):
             ("应用网络", "network", self._app_network_page()),
             ("运营商", "simcard", self._carrier_page()),
             ("运行日志", "list.bullet.rectangle", self._log_page()),
+            ("网络测速", "speedometer", self._speed_page.view),
         ):
             controller = AppKit.NSViewController.alloc().init()
             controller.setView_(view)
@@ -211,6 +215,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._chart = SpeedChart.alloc().init()
         self._chart_note = label("等待网卡采样", 11, True)
         self._traffic_breakdown = label("等待流量统计", 12, True, numeric=True)
+        self._monthly_history = label("暂无月度统计", 12, numeric=True)
         graph = group(
             [
                 section_title("速度趋势", "waveform.path"),
@@ -234,6 +239,18 @@ class SettingsWindowController(AppKit.NSWindowController):
                     ]
                 ),
                 graph,
+                group(
+                    [
+                        section_title("月度使用总量", "calendar"),
+                        self._monthly_history,
+                        label(
+                            "本机 QDC507 所有 SIM 合计；保留最近 12 个月视图，历史不会清零。"
+                            "月初新建统计，不等于运营商套餐恢复满额。",
+                            11,
+                            True,
+                        ),
+                    ]
+                ),
                 group(
                     [
                         section_title("统计口径", "info.circle"),
@@ -572,7 +589,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                         self._query_auto_note,
                         label(
                             "电信 10001 / 108；联通 10010 / CXTCYL；移动 10086 / CXLL。\n"
-                            "授权后换卡自动查询，成功后约 5 小时刷新；查询短信可能收费。\n"
+                            "授权后换卡／月初自动查询，成功后约 5 小时刷新；查询短信可能收费。\n"
                             "无回复或无法识别完整套餐时暂停自动查询，请手动核实当地指令。\n"
                             "收到的原文仍按你的 iMessage 开关转发；未转发成功不删除。",
                             11,
@@ -595,7 +612,7 @@ class SettingsWindowController(AppKit.NSWindowController):
                         ),
                         self._button("保存并启用接管…", "saveManualPlan:"),
                         label(
-                            "1 GB = 1024³ 字节。本自然月有效；下月重新设置，不自动清零。\n"
+                            "1 GB = 1024³ 字节。本自然月有效；月初尝试查询，失败须手动更新。\n"
                             "手动模式不受 6 小时查询期限影响，仍按 80% 确认、98% 停止。\n"
                             "仅估算本机后续用量；其他设备用量请自行更新。换卡不沿用额度。",
                             11,
@@ -709,6 +726,15 @@ class SettingsWindowController(AppKit.NSWindowController):
 
     @objc.python_method
     def refresh(self, include_target=True):
+        self._speed_page.refresh(self._delegate.speed_test_state())
+        self._monthly_history.setStringValue_(
+            "\n".join(
+                f"{month}    ↓ {format_bytes(rx)}    ↑ {format_bytes(tx)}"
+                f"    合计 {format_bytes(rx + tx)}"
+                for month, rx, tx in self._delegate.monthly_traffic()
+            )
+            or "暂无月度统计"
+        )
         self.refresh_logs()
         carrier_usage = self._delegate.carrier_usage()
         self._overview_ring.update(carrier_usage)
@@ -905,7 +931,9 @@ class SettingsWindowController(AppKit.NSWindowController):
             )
             for value in self._details.values():
                 value.setStringValue_("测试模式未检测")
-        self._overview_relay.setStringValue_(self._delegate.relay_health())
+        self._overview_relay.setStringValue_(
+            relay_switch_label(self._delegate.relay_enabled(), diagnostic)
+        )
         self._recent.setStringValue_(self._delegate.recent_relay() or "尚无转发记录")
         self._queue_info.setStringValue_(self._delegate.relay_queue_summary())
         self._appearance.setSelectedSegment_(

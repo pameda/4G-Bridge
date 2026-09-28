@@ -1,6 +1,7 @@
 """Durable, fail-closed reservations for opt-in SIM-change SMS queries.
 
-Persist intent *before* submitting AT+CMGS. An uncertain result is never retried.
+Persist intent *before* submitting AT+CMGS. Uncertain sends are not blindly retried;
+an opted-in monthly refresh permits one new query in a later calendar month.
 Only local HMAC SIM keys and timestamps are stored, not ICCIDs or SMS content.
 """
 
@@ -10,6 +11,7 @@ import math
 import re
 import sqlite3
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 
 from fourg_bridge.cellular.carrier_query import query_pdu
@@ -83,7 +85,8 @@ class AutoQueryLedger:
         """Reserve before sending: >=5h/SIM, <=8/24h overall, no blind retries.
 
         A lost or unparseable response keeps its reservation unresolved across
-        restarts. Only a verified response or an explicit manual query can recover.
+        restarts. A later calendar month permits one fresh query under the same
+        rate limits; otherwise only a verified reply or explicit manual query recovers.
         """
         if not re.fullmatch(r"[a-f0-9]{64}", key) or not math.isfinite(now) or now <= 0:
             raise ValueError("Invalid refresh reservation")
@@ -92,7 +95,12 @@ class AutoQueryLedger:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT stamp,resolved FROM refresh WHERE key=?", (key,)).fetchone()
-            if row and (not row[1] or now - row[0] < 5 * 3600):
+            new_month = bool(
+                row
+                and datetime.fromtimestamp(now).strftime("%Y-%m")
+                > datetime.fromtimestamp(row[0]).strftime("%Y-%m")
+            )
+            if row and ((not row[1] and not new_month) or now - row[0] < 5 * 3600):
                 return False
             recent = db.execute(
                 "SELECT key,stamp FROM attempts WHERE stamp > ?", (now - 86400,)

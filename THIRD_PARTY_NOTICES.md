@@ -25,6 +25,8 @@
 - `EC25Toolbox`：AGPL-3.0，只研究外部行为，不复制源码。
 
 本项目不包含上述参考项目的 Logo、图标、名称、品牌素材或受保护源码。
+
+测速协议参考 Cloudflare 官方 [speedtest](https://github.com/cloudflare/speedtest) 的公开 HTTP 端点说明；已检查其 [MIT LICENSE](https://github.com/cloudflare/speedtest/blob/main/LICENSE)。本项目未安装该包、未复制其源代码或视觉素材，使用 macOS 系统 curl 独立实现有限单连接传输，不声称等同官方测速评分。实际服务及公网 IP 处理见 [Cloudflare 说明](https://speed.cloudflare.com/about)。
 # Windows 构建补充（2026-09-26）
 
 Windows 运行代码只依赖官方 CPython / Tcl-Tk 标准发行运行时（PSF / Tcl-Tk 许可证）；与 macOS 的 PyObjC / libusb 依赖分离。

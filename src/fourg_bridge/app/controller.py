@@ -4,6 +4,7 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import replace
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from PyObjCTools import AppHelper
 from fourg_bridge.app.auto_data import AutoDataMonitor
 from fourg_bridge.app.login_item import LoginItem
 from fourg_bridge.app.runtime import ModemRuntime
+from fourg_bridge.app.speed_test import SpeedTestController
 from fourg_bridge.cellular.data_control import NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.imessage.diagnostics import relay_diagnostic
@@ -61,7 +63,9 @@ class ApplicationController:
         self._discovery = USBDiscovery()
         self._snapshot = ModemSnapshot()
         self._traffic_snapshot = None
-        self._traffic_usage = TrafficLedger(support / "traffic.sqlite").usage()
+        self._traffic_ledger = TrafficLedger(support / "traffic.sqlite")
+        self._traffic_usage = self._traffic_ledger.usage()
+        self._speed_test = SpeedTestController(self)
         self._recent_relay = None
         self._bridge_busy = False
         self._bridge_status = "尚未检查 iMessage；连接检查不会发送消息。"
@@ -119,6 +123,19 @@ class ApplicationController:
 
     def app_network_state(self):
         return self._app_rows, self._app_network_status, self._app_network_paused
+
+    def start_speed_test(self, mode, profile):
+        self._speed_test.start(mode, profile)
+
+    def stop_speed_test(self):
+        if getattr(self, "_speed_test", None):
+            self._speed_test.cancel()
+
+    def speed_test_state(self):
+        return self._speed_test.state
+
+    def monthly_traffic(self):
+        return self._traffic_ledger.months()
 
     def event_log(self, warnings_only=False):
         return self._events.text(warnings_only)
@@ -416,7 +433,8 @@ class ApplicationController:
             "电信：10001 / 108；联通：10010 / CXTCYL；移动：10086 / CXLL。\n"
             "按当前注册运营商识别，不按手机号猜测；可能产生短信费用。"
             "新卡或缺少套餐时查询，成功后约 5 小时刷新；同卡至少间隔 5 小时，"
-            "全部卡 24 小时最多 8 次。无回复或结果不确定不自动重发。\n"
+            "全部卡 24 小时最多 8 次。当月无回复或结果不确定不自动重发；"
+            "新月份允许一次新查询，查不到时请手动更新套餐。\n"
             "同时授权 Wi-Fi 故障自动接管；套餐有效且低于 80% 时可自动开启 4G，"
             "80% 起需确认，98% 自动停止。Wi-Fi 可用时优先使用 Wi-Fi。"
             "未知运营商、漫游和无法解析的套餐不会放行。"
@@ -478,8 +496,14 @@ class ApplicationController:
             budget = self._auto_data.carrier_budget
             if not budget or not budget.key:
                 return
-            if budget.is_manual():
-                self._auto_query_status = "当前卡使用手动套餐，不再自动发查询短信；下月须重新设置。"
+            usage = budget.usage()
+            same_month = bool(
+                usage
+                and usage.timestamp.astimezone().strftime("%Y-%m")
+                == datetime.now().astimezone().strftime("%Y-%m")
+            )
+            if budget.is_manual() and same_month:
+                self._auto_query_status = "本月使用手动套餐；月初尝试刷新，查不到时须手动更新。"
                 return
             try:
                 pending = self._auto_query_ledger.pending_refresh(budget.key, time.time())
@@ -491,7 +515,7 @@ class ApplicationController:
             usage = budget.usage()
             if usage and budget.status().state != "unknown":
                 age = time.time() - usage.timestamp.timestamp()
-                if 0 <= age < 5 * 3600:
+                if same_month and 0 <= age < 5 * 3600:
                     self._auto_query_status = (
                         "套餐已更新；约 5 小时后自动刷新。Wi-Fi 可用时优先使用。"
                     )
@@ -603,6 +627,7 @@ class ApplicationController:
         self.rescan()
 
     def workspaceDidSleep_(self, _notification) -> None:
+        self.stop_speed_test()
         self._event("sleep")
         self._keychain.clear_session_target()
         self._query_epoch += 1
@@ -760,6 +785,8 @@ class ApplicationController:
         self._menu.setTrafficSnapshot_usage_(snapshot, usage)
 
     def traffic_state(self):
+        if getattr(self, "_traffic_ledger", None):
+            self._traffic_usage = self._traffic_ledger.usage()
         return self._traffic_snapshot, self._traffic_usage
 
     def _apply_recent_relay(self, recent: str) -> None:
@@ -1224,6 +1251,7 @@ class ApplicationController:
         alert.runModal()
 
     def quit(self) -> None:
+        self.stop_speed_test()
         self._keychain.clear_session_target()
         self._query_epoch += 1
         self._query_suspended = True
@@ -1231,6 +1259,7 @@ class ApplicationController:
         AppKit.NSApp.terminate_(None)
 
     def close(self) -> None:
+        self.stop_speed_test()
         self._keychain.clear_session_target()
         self._query_epoch += 1
         self._query_suspended = True

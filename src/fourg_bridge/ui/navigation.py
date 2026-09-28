@@ -9,6 +9,7 @@ from fourg_bridge.ui.components import label, pin, stack, symbol
 DESTINATIONS = (
     (0, "连接总览", "square.grid.2x2"),
     (1, "本机流量", "chart.xyaxis.line"),
+    (8, "网络测速", "speedometer"),
     (6, "运营商套餐", "simcard"),
     (2, "短信转发", "message"),
     (5, "应用网络", "network"),
@@ -84,7 +85,9 @@ class Sidebar(AppKit.NSObject):
         scroll.setDrawsBackground_(False)
         scroll.setDocumentView_(self.table)
         scroll.setHasVerticalScroller_(False)
-        scroll.heightAnchor().constraintEqualToConstant_(340).setActive_(True)
+        scroll.heightAnchor().constraintEqualToConstant_(len(DESTINATIONS) * 40 + 20).setActive_(
+            True
+        )
         self.status = label("QDC507 · 等待连接", 11, True)
         self.status.setAccessibilityLabel_("模块连接状态")
         self.footnote = label("本机处理 · 隐私优先", 10, True)

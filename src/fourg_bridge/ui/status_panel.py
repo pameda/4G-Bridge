@@ -7,7 +7,12 @@ import objc
 
 from fourg_bridge import __version__
 from fourg_bridge.models import DataState
-from fourg_bridge.support.presentation import connection_title, format_bytes, operator_name
+from fourg_bridge.support.presentation import (
+    connection_title,
+    format_bytes,
+    operator_name,
+    relay_switch_label,
+)
 from fourg_bridge.ui.app_network import AppNetworkTable
 from fourg_bridge.ui.components import (
     PageBackground,
@@ -188,7 +193,11 @@ class StatusPanelController(AppKit.NSViewController):
             if sample
             else "↓ —    ↑ —    等待网卡采样"
         )
-        self._relay.setStringValue_(self._delegate.relay_health())
+        enabled = self._delegate.relay_enabled()
+        self._relay.setStringValue_(relay_switch_label(enabled))
+        self._relay.setTextColor_(
+            AppKit.NSColor.systemGreenColor() if enabled else AppKit.NSColor.secondaryLabelColor()
+        )
         self._recent.setStringValue_(self._delegate.recent_relay() or "本次运行暂无转发")
         if getattr(self._delegate, "diagnostic_mode", False):
             self._title.setStringValue_("短信测试模式")
@@ -196,7 +205,7 @@ class StatusPanelController(AppKit.NSViewController):
             self._data.setTitle_("恢复模块控制…")
             self._data.setEnabled_(True)
             self._warning.setStringValue_("恢复后先关闭数据；短信转发遵循已保存设置。")
-            self._relay.setStringValue_("测试模式中暂停")
+            self._relay.setStringValue_(relay_switch_label(False, paused=True))
 
     @objc.IBAction
     def showAppNetwork_(self, _sender):

@@ -1,5 +1,11 @@
 # 4G Bridge 架构
 
+## 0.1.20 测速与月度结算
+
+`network/speed_test.py` 提供固定容量、可取消的 HTTPS 测量，系统 curl 子进程只接收内存随机载荷，丢弃响应正文及原始错误。`app/speed_test.py` 管理用户确认、当前 SIM／网络代际／套餐保护；独立线程不占 AT 锁，主线程更新原生 `ui/speed_test.py`。不修改路由、DNS、VPN或数据开关。
+
+`TrafficLedger.months()` 读取已有月度 SQLite 聚合，补充本月零值并呈现最近 12 个月，历史不删除。统计仅覆盖应用观测的 QDC507 counters，各 SIM 合计，不代表账单。`AutoQueryLedger.claim_refresh()` 在跨自然月时允许一次新的已授权查询，保留同卡 5 小时／全部卡 24 小时 8 次频控及发送前落盘；当月失败不重试，跨月不伪造新套餐。手动模式当月免自动查询，跨月尝试查询或由用户重新填写。
+
 ## 0.1.19 三网套餐刷新
 
 短信无法给出完整数值时，`manual_plan` 验证用户输入，`ScopedCarrierBudget.set_manual_plan` 在确认后重新检查 SIM。账本 `source` 字段区分 carrier/manual：短信快照六小时失效，手动快照本自然月有效；二者使用同一增量计数与 80%／98% 保护。手动模式不自动发查询短信，其他 SIM 不继承；不保存正文。

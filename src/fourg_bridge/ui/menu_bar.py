@@ -5,6 +5,7 @@ import objc
 
 from fourg_bridge.models import DataState, ModemSnapshot
 from fourg_bridge.support.presentation import format_bytes as _format_bytes
+from fourg_bridge.support.presentation import relay_switch_label
 from fourg_bridge.support.status_item import status_item_style
 from fourg_bridge.ui.status_badge import STATUS_ITEM_WIDTH, make_status_badge
 from fourg_bridge.ui.status_panel import StatusPanelController
@@ -85,6 +86,7 @@ class MenuBarController(AppKit.NSObject):
         self._menu = parent
         self._add_action("设置…", "showSettings:", ",")
         self._add_action("应用网络…", "showAppNetwork:")
+        self._add_action("网络测速…", "showSpeedTest:")
         self._add_action("查询运营商流量…", "showCarrier:")
         self._add_action("重新检测模块", "rescan:")
         self._menu.addItem_(AppKit.NSMenuItem.separatorItem())
@@ -154,7 +156,12 @@ class MenuBarController(AppKit.NSObject):
         self._set("gateway", snapshot.gateway or "—")
         self._set("default", snapshot.default_interface or "—")
         self._set("vpn", "已连接" if snapshot.vpn_active else "未连接")
-        self._set("relay", self._delegate.relay_health())
+        self._set(
+            "relay",
+            relay_switch_label(
+                self._delegate.relay_enabled(), getattr(self._delegate, "diagnostic_mode", False)
+            ),
+        )
         self._values["data"].setTitle_(
             "关闭 4G 数据" if snapshot.data_state == DataState.ON else "开启 4G 数据…"
         )
@@ -184,7 +191,9 @@ class MenuBarController(AppKit.NSObject):
 
     @objc.python_method
     def setRelayStatus_recent_(self, enabled: bool, recent: str | None) -> None:
-        self._set("relay", self._delegate.relay_health())
+        self._set(
+            "relay", relay_switch_label(enabled, getattr(self._delegate, "diagnostic_mode", False))
+        )
         self._set("recent", recent or "—")
 
     @objc.IBAction
@@ -197,6 +206,12 @@ class MenuBarController(AppKit.NSObject):
     @objc.IBAction
     def showAppNetwork_(self, _sender):
         self._delegate.show_app_network()
+
+    @objc.IBAction
+    def showSpeedTest_(self, _sender):
+        self._popover.performClose_(None)
+        self._delegate._settings_window._tabs.setSelectedTabViewItemIndex_(8)
+        self._delegate.show_settings()
 
     @objc.IBAction
     def showCarrier_(self, _sender):

@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from fourg_bridge.models import DataState, ModemSnapshot, TrafficSnapshot
 
 
+def relay_switch_label(enabled: bool, paused: bool = False) -> str:
+    """A preference indicator, not a delivery receipt or queue diagnosis."""
+    return "已暂停" if paused else ("已开启" if enabled else "已关闭")
+
+
 @dataclass(frozen=True)
 class UsageStyle:
     percent: str
