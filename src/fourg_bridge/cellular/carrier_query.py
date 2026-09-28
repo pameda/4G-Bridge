@@ -38,6 +38,17 @@ class CarrierUsage:
         return self.used_bytes / self.total_bytes
 
 
+def query_response_issue(body: str) -> str:
+    """A redirect is not a balance. Return fixed safe UI text, never SMS content."""
+    if (
+        "查询" in body
+        and ("APP" in body.upper() or "客户端" in body)
+        and re.search(r"https?://", body, re.I)
+    ):
+        return "运营商只返回 App 查询入口，没有套餐数值；请在运营商 App 核实，4G 保护暂不放行。"
+    return "运营商回复未包含可确认的通用套餐总量和用量；请核实指令或套餐类型。"
+
+
 def parse_usage(sender: str, body: str, timestamp: datetime) -> CarrierUsage | None:
     """Only a single explicit total/used pair; never combine overlapping packages."""
     if sender not in ("10001", "10086", "10010"):
@@ -45,23 +56,34 @@ def parse_usage(sender: str, body: str, timestamp: datetime) -> CarrierUsage | N
     buckets = parse_telecom_buckets(sender, body, timestamp)
     if buckets:
         return buckets
-    if any(word in body for word in ("定向", "夜间", "闲时", "共享", "结转", "加油包")):
+    if "流量" not in body or any(
+        word in body for word in ("定向", "夜间", "闲时", "共享", "结转", "加油包", "省内")
+    ):
         return None
-    quantity = r"[为：:\s]*([0-9]+(?:\.[0-9]+)?)\s*(GB|MB|KB)"
-    totals = re.findall(r"(?:流量总量|总流量|流量总额|总量)" + quantity, body, re.I)
-    used = re.findall(r"(?:已使用(?:流量)?|已用(?:流量)?|使用流量)" + quantity, body, re.I)
-    if len(totals) != 1 or len(used) != 1:
+    quantity = r"[为：:\s]*([0-9]+(?:\.[0-9]+)?)\s*(GB|MB|KB|G|M|K)(?![A-Za-z])"
+    totals = re.findall(
+        r"(?:流量总量|总流量|流量总额|总量|(?:国内|通用|套餐内)?流量共)" + quantity, body, re.I
+    )
+    used = re.findall(r"(?:已使用(?:流量)?|已用(?:流量)?|使用流量|流量已用)" + quantity, body, re.I)
+    remaining_values = re.findall(
+        r"(?:剩余(?:通用|国内)?流量|(?:通用|国内)?流量剩余|剩余量|剩余)" + quantity,
+        body,
+        re.I,
+    )
+    if len(totals) != 1 or len(used) > 1 or len(remaining_values) > 1:
+        return None
+    if not used and not remaining_values:
         return None
 
     def count(value: tuple[str, str]) -> int:
         amount, unit = value
-        return int(Decimal(amount) * {"KB": 1024, "MB": 1024**2, "GB": 1024**3}[unit.upper()])
+        return int(Decimal(amount) * {"K": 1024, "M": 1024**2, "G": 1024**3}[unit[0].upper()])
 
-    total, consumed = count(totals[0]), count(used[0])
-    if total <= 0 or consumed > total:
+    total = count(totals[0])
+    consumed = count(used[0]) if used else total - count(remaining_values[0])
+    if total <= 0 or not 0 <= consumed <= total:
         return None
-    remaining = parse_allowance(sender, body, timestamp)
-    if remaining and abs(total - consumed - remaining.remaining_bytes) > max(
+    if remaining_values and abs(total - consumed - count(remaining_values[0])) > max(
         1024**2, total * 0.001
     ):
         return None
@@ -135,6 +157,10 @@ def parse_allowance(sender: str, body: str, timestamp: datetime) -> Allowance | 
     buckets = parse_telecom_buckets(sender, body, timestamp)
     if buckets:
         remaining = buckets.total_bytes - buckets.used_bytes
+        return Allowance(remaining, timestamp, sender, f"{remaining / 1024**3:.2f}", "GB")
+    usage = parse_usage(sender, body, timestamp)
+    if usage:
+        remaining = usage.total_bytes - usage.used_bytes
         return Allowance(remaining, timestamp, sender, f"{remaining / 1024**3:.2f}", "GB")
     matches = re.findall(
         r"(?:剩余(?:通用|国内)?流量|(?:通用|国内)?流量剩余)[为：:\s]*"

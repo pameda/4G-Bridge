@@ -19,6 +19,7 @@ class Settings:
     data_budget_period: str = "allowance"
     carrier_policy_enabled: bool = False
     auto_query_enabled: bool = False
+    auto_query_detect_carrier: bool = False
     auto_query_operator: str = ""
     auto_query_number: str = "10001"
     auto_query_command: str = "108"
@@ -53,7 +54,9 @@ class SettingsStore:
                 appearance=appearance if appearance in ("system", "light", "dark") else "system",
                 auto_data_enabled=payload.get("auto_data_enabled") is True,
                 carrier_policy_enabled=payload.get("carrier_policy_enabled") is True,
-                auto_query_enabled=payload.get("auto_query_enabled") is True and profile_ok,
+                auto_query_enabled=payload.get("auto_query_enabled") is True
+                and (profile_ok or payload.get("auto_query_detect_carrier") is True),
+                auto_query_detect_carrier=payload.get("auto_query_detect_carrier") is True,
                 auto_query_operator=operator if profile_ok else "",
                 auto_query_number=number if profile_ok else "10001",
                 auto_query_command=command if profile_ok else "108",

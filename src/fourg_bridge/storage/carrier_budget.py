@@ -29,12 +29,18 @@ class CarrierBudgetStore:
                 "used INTEGER, stamp TEXT, locked INTEGER, iface TEXT, boot TEXT, "
                 "rx INTEGER, tx INTEGER)"
             )
-            db.execute("INSERT OR IGNORE INTO plan VALUES(1,0,0,'',0,NULL,NULL,NULL,NULL)")
+            db.execute(
+                "INSERT OR IGNORE INTO plan (id,total,used,stamp,locked,iface,boot,rx,tx) "
+                "VALUES(1,0,0,'',0,NULL,NULL,NULL,NULL)"
+            )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(plan)")}
+            if "source" not in columns:
+                db.execute("ALTER TABLE plan ADD COLUMN source TEXT NOT NULL DEFAULT 'carrier'")
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise sqlite3.DatabaseError("carrier budget integrity")
         path.chmod(0o600)
 
-    def update_plan(self, usage: CarrierUsage) -> None:
+    def update_plan(self, usage: CarrierUsage, *, manual: bool = False) -> None:
         with self._lock, closing(sqlite3.connect(self.path)) as db, db:
             old_used, stamp, locked = db.execute(
                 "SELECT used,stamp,locked FROM plan WHERE id=1"
@@ -49,9 +55,19 @@ class CarrierBudgetStore:
             used = usage.used_bytes if new_month or not stamp else max(old_used, usage.used_bytes)
             locked = int((locked and not new_month) or used * 100 >= usage.total_bytes * 98)
             db.execute(
-                "UPDATE plan SET total=?,used=?,stamp=?,locked=? WHERE id=1",
-                (usage.total_bytes, used, usage.timestamp.isoformat(), locked),
+                "UPDATE plan SET total=?,used=?,stamp=?,locked=?,source=? WHERE id=1",
+                (
+                    usage.total_bytes,
+                    used,
+                    usage.timestamp.isoformat(),
+                    locked,
+                    "manual" if manual else "carrier",
+                ),
             )
+
+    def is_manual(self) -> bool:
+        with self._lock, closing(sqlite3.connect(self.path)) as db:
+            return bool(db.execute("SELECT source FROM plan WHERE id=1").fetchone()[0] == "manual")
 
     def observe(self, iface: str, boot: str, rx: int, tx: int) -> None:
         if min(rx, tx) < 0:
@@ -71,17 +87,21 @@ class CarrierBudgetStore:
 
     def status(self, now: datetime | None = None) -> CarrierBudgetStatus:
         with self._lock, closing(sqlite3.connect(self.path)) as db:
-            total, used, stamp, locked = db.execute(
-                "SELECT total,used,stamp,locked FROM plan WHERE id=1"
+            total, used, stamp, locked, source = db.execute(
+                "SELECT total,used,stamp,locked,source FROM plan WHERE id=1"
             ).fetchone()
         now = now or datetime.now().astimezone()
-        if total <= 0 or not stamp:
+        if total <= 0 or not stamp or source not in ("carrier", "manual"):
             state = "unknown"
         elif locked or used * 100 >= total * 98:
             state = "locked"
         elif (
             now.strftime("%Y-%m") != datetime.fromisoformat(stamp).strftime("%Y-%m")
-            or not 0 <= (now - datetime.fromisoformat(stamp)).total_seconds() <= 6 * 3600
+            or (now - datetime.fromisoformat(stamp)).total_seconds() < 0
+            or (
+                source == "carrier"
+                and (now - datetime.fromisoformat(stamp)).total_seconds() > 6 * 3600
+            )
         ):
             state = "stale"
         elif used * 100 >= total * 80 and not self.approved:
@@ -92,12 +112,15 @@ class CarrierBudgetStore:
 
     def usage(self) -> CarrierUsage | None:
         with self._lock, closing(sqlite3.connect(self.path)) as db:
-            total, used, stamp = db.execute(
-                "SELECT total,used,stamp FROM plan WHERE id=1"
+            total, used, stamp, source = db.execute(
+                "SELECT total,used,stamp,source FROM plan WHERE id=1"
             ).fetchone()
         return (
             CarrierUsage(
-                total, min(used, total), datetime.fromisoformat(stamp), "套餐＋本机新增 · 估算"
+                total,
+                min(used, total),
+                datetime.fromisoformat(stamp),
+                "手动套餐＋本机新增 · 估算" if source == "manual" else "套餐＋本机新增 · 估算",
             )
             if total and stamp
             else None

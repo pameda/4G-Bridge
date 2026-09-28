@@ -32,7 +32,7 @@ from fourg_bridge.modem.usb_discovery import USBDiscovery
 from fourg_bridge.network.app_traffic import AppTrafficTracker, read_counters
 from fourg_bridge.network.failover import Action
 from fourg_bridge.network.traffic import TrafficLedger
-from fourg_bridge.storage.auto_query import AutoQueryLedger, matches_profile, valid_profile
+from fourg_bridge.storage.auto_query import AutoQueryLedger, matches_profile
 from fourg_bridge.storage.budget import BudgetStore
 from fourg_bridge.storage.database import RelayDatabase
 from fourg_bridge.storage.keychain import KeychainError, KeychainStore
@@ -198,9 +198,12 @@ class ApplicationController:
 
     def carrier_state(self):
         allowance = getattr(self._runtime, "carrier_allowance", None)
+        budget = getattr(getattr(self, "_auto_data", None), "carrier_budget", None)
+        if budget and getattr(self._runtime, "carrier_sim_key", None) != budget.key:
+            allowance = None
         status = self._carrier_status
         if getattr(self._runtime, "carrier_reply_received", False):
-            status = "已收到运营商回复；无法明确识别的套餐信息请在“信息”查看原文。"
+            status = getattr(self._runtime, "carrier_problem", "") or "已收到并识别运营商套餐回复。"
         return self._carrier_busy, status, allowance
 
     def carrier_usage(self):
@@ -223,6 +226,12 @@ class ApplicationController:
                 "unknown": "等待完整套餐数据",
                 "stale": "套餐查询已超过 6 小时，请重新查询",
             }[state.state]
+            if self._auto_data.carrier_budget.is_manual():
+                description = (
+                    "手动套餐已跨月或时间异常，请重新设置"
+                    if state.state == "stale"
+                    else "手动估算 · " + description
+                )
             percent = f"估算已用 {state.used / state.total:.1%} · " if state.total else ""
             return (
                 percent
@@ -240,7 +249,9 @@ class ApplicationController:
             return
         usage = self.carrier_usage()
         if not usage or not self._auto_data.carrier_budget:
-            self._show_alert("需要套餐数据", "请先查询运营商，并确认总量和已用量已被识别。")
+            self._show_alert(
+                "需要套餐数据", "请先查询运营商，或在运营商套餐页手动设置总量和剩余量。"
+            )
             return
         self._auto_data.carrier_budget.update_plan(
             usage, sim_key=self._auto_data.carrier_budget.key
@@ -249,8 +260,9 @@ class ApplicationController:
         alert.setMessageText_("允许按套餐上限自动接管？")
         alert.setInformativeText_(
             "Wi-Fi 断开或无互联网时自动请求 4G 接管；80% 前不限速，80% 起需确认，98% 自动关闭。\n"
-            "使用运营商快照＋本机新增流量估算，不是实时账单。查询超过 6 小时会暂停，需手动查询；"
-            "不会后台发送收费短信。不会关闭 VPN；VPN 自身仍需支持网络切换。"
+            "使用套餐快照＋本机新增流量估算，不是实时账单。短信快照超过 6 小时会暂停；"
+            "手动套餐本自然月有效、下月须重新设置。"
+            "自动查询需单独授权。不会关闭 VPN；VPN 自身仍需支持网络切换。"
         )
         alert.addButtonWithTitle_("允许自动接管")
         alert.addButtonWithTitle_("取消")
@@ -261,6 +273,50 @@ class ApplicationController:
         )
         self._settings_store.save(self._settings)
         self._auto_data.reset()
+        self._settings_window.refresh(False)
+
+    def set_manual_carrier_plan(self, total, remaining):
+        from datetime import datetime
+
+        from fourg_bridge.cellular.manual_plan import manual_usage
+        from fourg_bridge.support.presentation import format_bytes
+
+        budget = self._auto_data.carrier_budget
+        key = budget.key if budget else None
+        if self.diagnostic_mode or not key or self._snapshot.sim_state != SIMState.READY:
+            self._show_alert("尚不能设置套餐", "请先连接并识别当前 SIM；不会将套餐套用到其他卡。")
+            return
+        try:
+            usage = manual_usage(total, remaining, datetime.now().astimezone())
+        except ValueError as error:
+            self._show_alert("套餐数值无效", str(error))
+            return
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("保存当前 SIM 的手动套餐并启用接管？")
+        alert.setInformativeText_(
+            f"总量 {format_bytes(usage.total_bytes)}，剩余 "
+            f"{format_bytes(usage.total_bytes - usage.used_bytes)}。\n"
+            "请按运营商 App 的国内通用流量填写，不包含定向或共享包。"
+            "这不是实时账单：仅累加本机后续流量，其他设备和应用未运行时的用量需自行更新。\n"
+            "Wi-Fi 可用时优先；80% 确认、98% 停止。"
+            "本自然月内有效，不因 6 小时未查询而停止；下月须重新设置。"
+            "同月不能降低已计用量或解除已有 98% 锁定。"
+        )
+        alert.addButtonWithTitle_("保存并启用")
+        alert.addButtonWithTitle_("取消")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        try:
+            # Recheck the identity after the modal run loop; hot swaps can run meanwhile.
+            budget.set_manual_plan(usage, sim_key=key)
+            settings = replace(self._settings, carrier_policy_enabled=True, auto_data_enabled=True)
+            if not self._save_query_settings(settings):
+                return
+            self._settings = settings
+            self._auto_data.reset()
+            self._carrier_status = "手动套餐已保存；Wi-Fi 故障时按当前 SIM 的余量保护接管。"
+        except Exception:
+            self._show_alert("套餐未能生效", "SIM 已变化或账本不可用；未新开启 4G，请重新检测。")
         self._settings_window.refresh(False)
 
     def _carrier_consent(self):
@@ -311,6 +367,16 @@ class ApplicationController:
 
     def auto_query_state(self):
         enabled = self._settings.auto_query_enabled
+        if enabled and self._settings.auto_query_detect_carrier:
+            from fourg_bridge.cellular.operator_profile import operator_profile
+
+            profile = operator_profile(self._snapshot)
+            detected = (
+                f"{profile.name} · {profile.number} / {profile.command}"
+                if profile
+                else "等待识别非漫游的电信、联通或移动 SIM"
+            )
+            return True, f"三网自动识别：{detected}。\n{self._auto_query_status}"
         profile = (
             f"已授权 {self._settings.auto_query_operator} · "
             f"{self._settings.auto_query_number} / {self._settings.auto_query_command}。"
@@ -328,13 +394,16 @@ class ApplicationController:
             self._settings_window.refresh(False)
             return
         snapshot = self._snapshot
+        from fourg_bridge.cellular.operator_profile import operator_profile
+
+        profile = operator_profile(snapshot)
         operator = snapshot.operator or ""
         if (
             self.diagnostic_mode
             or self._auto_query_ledger is None
             or self._query_suspended
             or not matches_profile(snapshot, operator)
-            or not valid_profile(operator, number, command)
+            or profile is None
         ):
             self._show_alert(
                 "暂不能授权自动查询", "请连接已就绪、非漫游的 SIM，并核实服务号和指令。"
@@ -342,13 +411,15 @@ class ApplicationController:
             self._settings_window.refresh(False)
             return
         alert = AppKit.NSAlert.alloc().init()
-        alert.setMessageText_("允许换卡后自动查询套餐？")
+        alert.setMessageText_("允许三网自动查询并恢复接管？")
         alert.setInformativeText_(
-            f"仅在运营商为 {operator} 时，向 {number} 发送 {command}。\n"
-            "请确认该运营商及套餐适用此指令；可能产生短信费用。\n"
-            "首次开启也会为当前卡尝试一次。每张卡 24 小时最多一次，全部卡合计最多三次；"
-            "失败或结果不确定不重试，重插和重启不重复发送，不做定时查询。\n"
-            "运营商不匹配或漫游时需手动确认；新套餐未知前不自动开启 4G 数据。"
+            "电信：10001 / 108；联通：10010 / CXTCYL；移动：10086 / CXLL。\n"
+            "按当前注册运营商识别，不按手机号猜测；可能产生短信费用。"
+            "新卡或缺少套餐时查询，成功后约 5 小时刷新；同卡至少间隔 5 小时，"
+            "全部卡 24 小时最多 8 次。无回复或结果不确定不自动重发。\n"
+            "同时授权 Wi-Fi 故障自动接管；套餐有效且低于 80% 时可自动开启 4G，"
+            "80% 起需确认，98% 自动停止。Wi-Fi 可用时优先使用 Wi-Fi。"
+            "未知运营商、漫游和无法解析的套餐不会放行。"
         )
         alert.addButtonWithTitle_("同意并开启")
         alert.addButtonWithTitle_("取消")
@@ -356,15 +427,19 @@ class ApplicationController:
             settings = replace(
                 self._settings,
                 auto_query_enabled=True,
+                auto_query_detect_carrier=True,
                 auto_query_operator=operator,
-                auto_query_number=number,
-                auto_query_command=command,
+                auto_query_number=profile.number,
+                auto_query_command=profile.command,
+                carrier_policy_enabled=True,
+                auto_data_enabled=True,
             )
             if not self._save_query_settings(settings):
                 self._settings_window.refresh(False)
                 return
             self._settings = settings
             self._auto_query_seen = None
+            self._auto_data.reset()
             self._auto_query_status = "等待验证当前 SIM；无需开启 4G 数据。"
             self._maybe_auto_query(snapshot)
         self._settings_window.refresh(False)
@@ -393,6 +468,41 @@ class ApplicationController:
             or self._auto_query_ledger is None
         ):
             return
+        if settings.auto_query_detect_carrier:
+            from fourg_bridge.cellular.operator_profile import operator_profile
+
+            profile = operator_profile(snapshot)
+            if profile is None:
+                self._auto_query_status = "未确认三网非漫游 SIM；不会猜测或发送查询。"
+                return
+            budget = self._auto_data.carrier_budget
+            if not budget or not budget.key:
+                return
+            if budget.is_manual():
+                self._auto_query_status = "当前卡使用手动套餐，不再自动发查询短信；下月须重新设置。"
+                return
+            try:
+                pending = self._auto_query_ledger.pending_refresh(budget.key, time.time())
+                if pending and pending[0] == profile.number:
+                    self._runtime.restore_carrier_query(budget.key, *pending)
+            except Exception:
+                self._auto_query_status = "查询记录不可用，自动查询已暂停。"
+                return
+            usage = budget.usage()
+            if usage and budget.status().state != "unknown":
+                age = time.time() - usage.timestamp.timestamp()
+                if 0 <= age < 5 * 3600:
+                    self._auto_query_status = (
+                        "套餐已更新；约 5 小时后自动刷新。Wi-Fi 可用时优先使用。"
+                    )
+                    return
+            # Unlike legacy change-only queries, re-evaluate due time every scan.
+            # Durable reservations suppress repeats across threads/restarts/replugs.
+            if self._runtime.carrier_pending:
+                self._auto_query_status = "等待运营商回复；无需开启 4G 数据。"
+                return
+            self._begin_carrier_query(profile.number, profile.command, settings)
+            return
         if not matches_profile(snapshot, settings.auto_query_operator):
             self._auto_query_status = (
                 "等待已授权运营商的非漫游 SIM；其他运营商请手动查询并重新授权。"
@@ -412,6 +522,20 @@ class ApplicationController:
         if expected_sim is None:
             self._carrier_status = "SIM 身份尚未确认，未发送查询；请等待重新检测。"
             return
+        if automatic and automatic.auto_query_detect_carrier:
+            try:
+                if not self._auto_query_ledger.claim_refresh(
+                    expected_sim, time.time(), number=number, command=command
+                ):
+                    self._auto_query_status = (
+                        getattr(self._runtime, "carrier_problem", "")
+                        or "自动查询已限频或上次回复尚未确认；可手动查询恢复，不会连续发送短信。"
+                    )
+                    return
+            except Exception:
+                self._auto_query_status = "查询记录不可用，自动查询已暂停。"
+                return
+        expected_operator = self._snapshot.operator
         self._carrier_busy = True
         self._reply_logged = False
         self._event("query")
@@ -432,18 +556,26 @@ class ApplicationController:
                         status = "自动查询授权已变化，未发送。"
                     elif self._runtime.carrier_pending:
                         status = "仍在等待查询回复，没有重复发送。"
-                    elif automatic and not self._auto_query_ledger.claim(expected_sim, time.time()):
+                    elif (
+                        automatic
+                        and not automatic.auto_query_detect_carrier
+                        and not self._auto_query_ledger.claim(expected_sim, time.time())
+                    ):
                         status = "本卡已尝试查询或达到自动查询频率限制；需要时请手动查询。"
                     else:
                         if not automatic and self._auto_query_ledger:
                             # A manually authorized attempt also suppresses the automatic one.
-                            with suppress(Exception):
+                            if self._settings.auto_query_detect_carrier:
+                                self._auto_query_ledger.record_manual(
+                                    expected_sim, time.time(), number, command
+                                )
+                            else:
                                 self._auto_query_ledger.claim(expected_sim, time.time())
                         status = self._runtime.query_carrier(
                             number,
                             command,
                             expected_sim=expected_sim,
-                            operator=automatic.auto_query_operator if automatic else None,
+                            operator=expected_operator if automatic else None,
                             authorized=(
                                 lambda: self._settings == automatic
                                 and epoch == self._query_epoch
@@ -579,6 +711,14 @@ class ApplicationController:
                 self._auto_data.carrier_budget.update_plan(
                     usage, sim_key=getattr(self._runtime, "carrier_sim_key", None)
                 )
+                if (
+                    getattr(self, "_auto_query_ledger", None)
+                    and getattr(self._runtime, "carrier_sim_key", None)
+                    == self._auto_data.carrier_budget.key
+                ):
+                    self._auto_query_ledger.complete_refresh(
+                        self._auto_data.carrier_budget.key, usage.timestamp.timestamp()
+                    )
             except Exception:
                 self._auto_data.error = True
         if self._data_busy:

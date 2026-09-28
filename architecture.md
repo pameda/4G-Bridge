@@ -1,5 +1,13 @@
 # 4G Bridge 架构
 
+## 0.1.19 三网套餐刷新
+
+短信无法给出完整数值时，`manual_plan` 验证用户输入，`ScopedCarrierBudget.set_manual_plan` 在确认后重新检查 SIM。账本 `source` 字段区分 carrier/manual：短信快照六小时失效，手动快照本自然月有效；二者使用同一增量计数与 80%／98% 保护。手动模式不自动发查询短信，其他 SIM 不继承；不保存正文。
+
+`cellular/operator_profile.py` 仅按明确 COPS 名称／PLMN 和非漫游注册状态选择固定查询配置。`storage/auto_query.py` 保留 v1/v2 换卡预约并迁移到 v3，增加智能刷新预约、服务号／指令与完整回复确认；未确认的发送跨重启恢复接收，不盲目重发。
+
+控制器经独立授权持久化 `auto_query_detect_carrier` 与自动接管偏好，换卡／套餐未知／成功快照 5 小时到期时提出查询；发送前再次在 AT 事务锁内核验 SIM、运营商和授权。回复必须匹配当前查询时间、服务号和 SIM。套餐数值先进入 SIM 独立账本，网络守卫继续独立评估 Wi-Fi、额度和 80%／98% 阈值；查询线程不直接开启网卡，也不覆盖后续手动关闭。
+
 ## 0.1.13 / Windows preview.3 安全与切网
 
 - Mac `ScopedCarrierBudget` 使用安装内随机密钥生成 SIM HMAC，身份失效即撤销本次授权；首次绑定只接收绑定时间之后的套餐回复。旧无归属账本不导入，SIM 切换重建 counter 基线，不清除已有用量或锁定。

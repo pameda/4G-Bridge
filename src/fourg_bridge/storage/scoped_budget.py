@@ -77,6 +77,18 @@ class ScopedCarrierBudget:
             if self._store:
                 self._store.observe(iface, boot, rx, tx)
 
+    def is_manual(self) -> bool:
+        with self._lock:
+            return bool(self._store and self._store.is_manual())
+
+    def set_manual_plan(self, usage: CarrierUsage, *, sim_key: str) -> None:
+        with self._lock:
+            if not self._store or sim_key != self.key or not self._since:
+                raise ValueError("SIM identity changed")
+            if usage.timestamp < self._since:
+                raise ValueError("Plan predates SIM binding")
+            self._store.update_plan(usage, manual=True)
+
     def status(self, now: datetime | None = None) -> CarrierBudgetStatus:
         with self._lock:
             return self._store.status(now) if self._store else CarrierBudgetStatus(0, 0, "unknown")

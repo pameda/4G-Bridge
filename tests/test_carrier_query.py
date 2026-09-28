@@ -127,6 +127,7 @@ def test_query_reply_parsed_without_relay_or_deletion(monkeypatch):
     runtime._sms_identity = ("test", "sim")
     runtime._assembler = SimpleNamespace(add=lambda part: message)
     runtime._carrier_requested_at = now
+    runtime._carrier_query_sim = "sim"
     runtime._carrier_number = "10001"
     monkeypatch.setattr("fourg_bridge.app.runtime.decode_pdu", lambda raw: raw)
     assert runtime.poll_sms(relay_enabled=False) is None

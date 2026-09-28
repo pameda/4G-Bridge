@@ -6,7 +6,12 @@ from contextlib import suppress
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from fourg_bridge.cellular.carrier_query import parse_allowance, parse_usage, send_query
+from fourg_bridge.cellular.carrier_query import (
+    parse_allowance,
+    parse_usage,
+    query_response_issue,
+    send_query,
+)
 from fourg_bridge.cellular.data_control import ModemAttachControl, NetworkSetupControl
 from fourg_bridge.imessage.bridge import MessagesBridge
 from fourg_bridge.models import DataState, ModemSnapshot, RelayStatus, SIMState
@@ -43,6 +48,7 @@ class ModemRuntime:
         self.carrier_allowance = None
         self.carrier_usage = None
         self.carrier_reply_received = False
+        self.carrier_problem = ""
         self.carrier_cache_pending = True
         self._carrier_cache_at = None
         self._carrier_deadline = 0.0
@@ -115,6 +121,15 @@ class ModemRuntime:
     def carrier_pending(self):
         return time.monotonic() < self._carrier_deadline
 
+    def restore_carrier_query(self, key, number, stamp):
+        """Resume reading the existing query's reply without submitting another SMS."""
+        if self._carrier_requested_at is not None:
+            return
+        self._carrier_query_sim = key
+        self._carrier_number = number
+        self._carrier_requested_at = datetime.fromtimestamp(stamp).astimezone()
+        self._carrier_deadline = time.monotonic() + 600
+
     def query_carrier(self, number, command, *, expected_sim=None, operator=None, authorized=None):
         if self.carrier_pending:
             return "仍在等待上次回复，最多等待 10 分钟；没有重复发送。"
@@ -140,6 +155,7 @@ class ModemRuntime:
             return "仍在等待上次回复，最多等待 10 分钟；没有重复发送。"
         self._carrier_requested_at = datetime.now().astimezone().replace(microsecond=0)
         self.carrier_reply_received = False
+        self.carrier_problem = ""
         self.carrier_allowance = None
         self.carrier_usage = None
         self._carrier_number = number
@@ -160,6 +176,7 @@ class ModemRuntime:
             self.carrier_sim_key = None
             self._carrier_cache_at = None
             self.carrier_reply_received = False
+            self.carrier_problem = ""
             if getattr(self, "_carrier_query_sim", None) != identity[1]:
                 self._carrier_requested_at = None
                 self._carrier_number = None
@@ -175,6 +192,8 @@ class ModemRuntime:
                 continue
             if (
                 message.sender in ("10001", "10086", "10010")
+                and getattr(self, "_carrier_requested_at", None) is not None
+                and getattr(self, "_carrier_query_sim", None) == self._receiver.sim_key
                 and message.timestamp
                 >= (
                     getattr(self, "_carrier_requested_at", None)
@@ -196,10 +215,14 @@ class ModemRuntime:
                 if usage:
                     self.carrier_usage = usage
                     self.carrier_sim_key = self._receiver.sim_key
+                    self._carrier_deadline = 0
+                    self.carrier_problem = ""
                 else:
-                    self.carrier_usage = None
+                    self.carrier_problem = query_response_issue(message.body)
+                    self._carrier_deadline = 0
                 if allowance:
                     self.carrier_allowance = allowance
+                    self.carrier_sim_key = self._receiver.sim_key
                     self._carrier_deadline = 0
             if not relay_enabled:
                 continue  # Query replies stay on the module until successfully relayed.

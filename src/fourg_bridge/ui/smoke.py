@@ -71,6 +71,9 @@ class PreviewDelegate:
         self.query_enabled = enabled
         self.query_profile = (number, command)
 
+    def set_manual_carrier_plan(self, total, remaining):
+        self.manual_plan = (total, remaining)
+
     def carrier_usage(self):
         fraction = getattr(self, "preview_fraction", 0.2)
         return (
@@ -140,6 +143,15 @@ def run(output: Path) -> None:
     window = SettingsWindowController.alloc().initWithDelegate_(delegate)
     window._sidebar.footnote.setStringValue_("界面验证 · 模拟数据，非实机状态")
     window.refresh()
+    window._manual_total.setStringValue_("100")
+    window._manual_remaining.setStringValue_("90")
+    window.refresh(False)
+    window.saveManualPlan_(None)
+    assert delegate.manual_plan == ("100", "90")
+    delegate.snapshot = replace(delegate.snapshot, iccid="8" * 20)
+    window.refresh(False)
+    assert window._manual_total.stringValue() == ""
+    assert window._manual_remaining.stringValue() == ""
     window.showWindow_(None)
     menu.update_(delegate.current_snapshot())
     for appearance in ("NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"):

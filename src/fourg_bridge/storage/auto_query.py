@@ -51,19 +51,92 @@ class AutoQueryLedger:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with closing(sqlite3.connect(path)) as db, db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if (exists and version != 1) or (not exists and version != 0):
+            if (exists and version not in (1, 2, 3)) or (not exists and version != 0):
                 raise ValueError("Unsupported automatic query ledger version")
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ValueError("Invalid automatic query ledger")
             if exists:
                 db.execute("SELECT key FROM current_sim WHERE id=1").fetchall()
                 db.execute("SELECT key,stamp FROM attempts").fetchall()
+            if version >= 2:
+                db.execute("SELECT key,stamp,resolved FROM refresh").fetchall()
+            if version == 3:
+                db.execute("SELECT number,command FROM refresh").fetchall()
             db.execute("CREATE TABLE IF NOT EXISTS current_sim (id INTEGER PRIMARY KEY, key TEXT)")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS attempts (key TEXT NOT NULL, stamp REAL NOT NULL)"
             )
-            db.execute("PRAGMA user_version=1")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS refresh "
+                "(key TEXT PRIMARY KEY, stamp REAL NOT NULL, resolved INTEGER NOT NULL, "
+                "number TEXT, command TEXT)"
+            )
+            if version == 2:
+                db.execute("ALTER TABLE refresh ADD COLUMN number TEXT")
+                db.execute("ALTER TABLE refresh ADD COLUMN command TEXT")
+            db.execute("PRAGMA user_version=3")
         path.chmod(0o600)
+
+    def claim_refresh(
+        self, key: str, now: float, *, number: str | None = None, command: str | None = None
+    ) -> bool:
+        """Reserve before sending: >=5h/SIM, <=8/24h overall, no blind retries.
+
+        A lost or unparseable response keeps its reservation unresolved across
+        restarts. Only a verified response or an explicit manual query can recover.
+        """
+        if not re.fullmatch(r"[a-f0-9]{64}", key) or not math.isfinite(now) or now <= 0:
+            raise ValueError("Invalid refresh reservation")
+        if number is not None or command is not None:
+            query_pdu(number, command)  # type: ignore[arg-type]
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT stamp,resolved FROM refresh WHERE key=?", (key,)).fetchone()
+            if row and (not row[1] or now - row[0] < 5 * 3600):
+                return False
+            recent = db.execute(
+                "SELECT key,stamp FROM attempts WHERE stamp > ?", (now - 86400,)
+            ).fetchall()
+            if len(recent) >= 8 or any(k == key and now - stamp < 5 * 3600 for k, stamp in recent):
+                return False
+            db.execute(
+                "INSERT OR REPLACE INTO refresh VALUES(?,?,0,?,?)",
+                (key, int(now), number, command),
+            )
+            db.execute("INSERT INTO attempts VALUES(?,?)", (key, now))
+            db.execute("DELETE FROM attempts WHERE stamp <= ?", (now - 86400,))
+            return True
+
+    def record_manual(self, key: str, now: float, number: str, command: str) -> None:
+        """An explicitly confirmed manual send supersedes a failed reservation."""
+        if not re.fullmatch(r"[a-f0-9]{64}", key) or not math.isfinite(now) or now <= 0:
+            raise ValueError("Invalid manual reservation")
+        query_pdu(number, command)
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT OR REPLACE INTO refresh VALUES(?,?,0,?,?)",
+                (key, int(now), number, command),
+            )
+            db.execute("INSERT INTO attempts VALUES(?,?)", (key, now))
+
+    def pending_refresh(self, key: str, now: float) -> tuple[str, float] | None:
+        """Restore reply reception, never sending, after an app restart."""
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute(
+                "SELECT number,stamp FROM refresh WHERE key=? AND resolved=0", (key,)
+            ).fetchone()
+        if row and row[0] in ("10001", "10010", "10086") and 0 <= now - row[1] <= 6 * 3600:
+            return row[0], row[1]
+        return None
+
+    def complete_refresh(self, key: str, reply_stamp: float) -> None:
+        """Only callers with a SIM-bound, fully parsed reply may acknowledge it."""
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute(
+                "UPDATE refresh SET resolved=1 WHERE key=? AND stamp<=?",
+                (key, reply_stamp),
+            )
 
     def claim(self, key: str, now: float) -> bool:
         if not re.fullmatch(r"[a-f0-9]{64}", key) or not math.isfinite(now) or now <= 0:

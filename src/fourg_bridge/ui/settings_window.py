@@ -508,6 +508,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         )
         self._carrier_command.widthAnchor().constraintEqualToConstant_(100).setActive_(True)
         self._carrier_command.setAccessibilityLabel_("运营商查询指令")
+        self._carrier_form_operator = None
         self._carrier_button = self._button("查询一次…", "queryCarrier:")
         self._carrier_note = label("尚未发送查询", 12, True)
         self._carrier_remaining = label("—", 30, weight=AppKit.NSFontWeightSemibold, numeric=True)
@@ -515,17 +516,27 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._carrier_policy = label("尚未启用套餐保护", 12, True)
         self._carrier_ring = UsageRing.alloc().init()
         self._query_auto = AppKit.NSSwitch.alloc().init()
-        self._query_auto.setAccessibilityLabel_("换卡后自动查询套餐")
+        self._query_auto.setAccessibilityLabel_("自动识别运营商并刷新套餐")
         self._query_auto.setTarget_(self)
         self._query_auto.setAction_("autoQueryChanged:")
         self._query_auto_note = label("默认关闭", 11, True)
+        self._manual_total = AppKit.NSTextField.textFieldWithString_("")
+        self._manual_remaining = AppKit.NSTextField.textFieldWithString_("")
+        for field, title in (
+            (self._manual_total, "手动套餐总量 GB"),
+            (self._manual_remaining, "手动套餐剩余 GB"),
+        ):
+            field.setAccessibilityLabel_(title)
+            field.widthAnchor().constraintEqualToConstant_(110).setActive_(True)
+            field.setPlaceholderString_("填写数值")
+        self._manual_sim_token = None
         return page(
             "运营商流量",
             "套餐余量与本机计数，分开查看。",
             [
                 group(
                     [
-                        section_title("剩余流量 · 短信识别", "simcard"),
+                        section_title("剩余流量 · 当前 SIM", "simcard"),
                         stack(
                             [
                                 self._carrier_ring,
@@ -557,12 +568,36 @@ class SettingsWindowController(AppKit.NSWindowController):
                             True,
                         ),
                         self._carrier_note,
-                        stack([label("换卡后自动查询套餐", 13), self._query_auto], True),
+                        stack([label("自动识别运营商并刷新套餐", 13), self._query_auto], True),
                         self._query_auto_note,
                         label(
-                            "预填电信 10001 / 108。地区、运营商及套餐可能不同，发送前请核实。\n"
-                            "查询短信可能收费；自动查询仅按已授权号码和指令，不做定时查询。\n"
+                            "电信 10001 / 108；联通 10010 / CXTCYL；移动 10086 / CXLL。\n"
+                            "授权后换卡自动查询，成功后约 5 小时刷新；查询短信可能收费。\n"
+                            "无回复或无法识别完整套餐时暂停自动查询，请手动核实当地指令。\n"
                             "收到的原文仍按你的 iMessage 开关转发；未转发成功不删除。",
+                            11,
+                            True,
+                        ),
+                    ]
+                ),
+                group(
+                    [
+                        section_title("查询不到？手动设置套餐", "square.and.pencil"),
+                        label("从运营商 App 填写当前 SIM 的国内通用流量，不发送短信。", 12, True),
+                        stack(
+                            [
+                                label("总量 GB", 12),
+                                self._manual_total,
+                                label("剩余 GB", 12),
+                                self._manual_remaining,
+                            ],
+                            True,
+                        ),
+                        self._button("保存并启用接管…", "saveManualPlan:"),
+                        label(
+                            "1 GB = 1024³ 字节。本自然月有效；下月重新设置，不自动清零。\n"
+                            "手动模式不受 6 小时查询期限影响，仍按 80% 确认、98% 停止。\n"
+                            "仅估算本机后续用量；其他设备用量请自行更新。换卡不沿用额度。",
                             11,
                             True,
                         ),
@@ -641,9 +676,9 @@ class SettingsWindowController(AppKit.NSWindowController):
                         self._policy_status,
                         columns(self._stage_cards),
                         label(
-                            "上限自动取自运营商套餐，不需要另填 GB 额度。Wi-Fi 可用时优先使用。\n"
-                            "未知套餐或查询超过 6 小时时暂停开启，请手动重新查询。\n"
-                            "按运营商回复＋本机新增流量估算，存在延迟，不是实时账单。",
+                            "上限使用当前 SIM 套餐总量；查不到时可手动设置。Wi-Fi 可用时优先。\n"
+                            "短信快照 6 小时有效；手动套餐本自然月有效，下月须重新填写。\n"
+                            "按套餐快照＋本机新增流量估算，存在延迟，不是实时账单。",
                             11,
                             True,
                         ),
@@ -715,16 +750,34 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._login.setState_(int(login_state == 1))
         self._login_status.setStringValue_(login_text)
         carrier_busy, carrier_status, allowance = self._delegate.carrier_state()
+        from fourg_bridge.cellular.operator_profile import operator_profile
+
+        detected = operator_profile(self._delegate.current_snapshot())
+        sim_token = self._delegate.current_snapshot().iccid
+        if sim_token != self._manual_sim_token:
+            self._manual_total.setStringValue_("")
+            self._manual_remaining.setStringValue_("")
+            self._manual_sim_token = sim_token
+        if detected and detected.name != self._carrier_form_operator:
+            self._carrier_number.selectItemWithTitle_(detected.number)
+            self._carrier_command.setStringValue_(detected.command)
+            self._carrier_form_operator = detected.name
         self._carrier_button.setEnabled_(not carrier_busy)
         self._carrier_note.setStringValue_(carrier_status)
         query_enabled, query_note = self._delegate.auto_query_state()
         self._query_auto.setState_(int(query_enabled))
         self._query_auto_note.setStringValue_(query_note)
         self._carrier_remaining.setStringValue_(
-            f"{allowance.amount} {allowance.unit}" if allowance else "—"
+            format_bytes(carrier_usage.total_bytes - carrier_usage.used_bytes)
+            if carrier_usage
+            else f"{allowance.amount} {allowance.unit}"
+            if allowance
+            else "—"
         )
         self._carrier_updated.setStringValue_(
-            f"{allowance.timestamp:%m-%d %H:%M} · {allowance.sender} · 仅本次运行缓存"
+            f"{carrier_usage.timestamp:%m-%d %H:%M} · 当前 SIM · {carrier_usage.basis}"
+            if carrier_usage
+            else f"{allowance.timestamp:%m-%d %H:%M} · {allowance.sender} · 仅本次运行缓存"
             if allowance
             else "等待明确的剩余流量回复；未识别时请在“信息”查看原文。"
         )
@@ -736,7 +789,7 @@ class SettingsWindowController(AppKit.NSWindowController):
         self._auto_enabled.setEnabled_(not diagnostic)
         self._policy_status.setStringValue_(policy_status)
         self._budget_usage.setStringValue_(
-            f"4G 上限：{format_bytes(carrier_usage.total_bytes)} · 运营商套餐总量"
+            f"4G 上限：{format_bytes(carrier_usage.total_bytes)} · {carrier_usage.basis}"
             if carrier_usage
             else "4G 上限：等待运营商套餐总量"
         )
@@ -887,6 +940,12 @@ class SettingsWindowController(AppKit.NSWindowController):
             bool(self._query_auto.state()),
             self._carrier_number.titleOfSelectedItem(),
             self._carrier_command.stringValue().strip(),
+        )
+
+    @objc.IBAction
+    def saveManualPlan_(self, _sender):
+        self._delegate.set_manual_carrier_plan(
+            self._manual_total.stringValue().strip(), self._manual_remaining.stringValue().strip()
         )
 
     def showAbout_(self, _sender):

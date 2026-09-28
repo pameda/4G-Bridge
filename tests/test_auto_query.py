@@ -176,7 +176,9 @@ def fake_app(tmp_path, monkeypatch):
     app._auto_query_ledger = AutoQueryLedger(tmp_path / "auto-query.sqlite")
     app._carrier_busy = app._data_busy = False
     app._runtime_lock = threading.RLock()
-    app._auto_data = SimpleNamespace(carrier_budget=SimpleNamespace(key="a" * 64))
+    app._auto_data = SimpleNamespace(
+        carrier_budget=SimpleNamespace(key="a" * 64, is_manual=lambda: False), reset=Mock()
+    )
     app._runtime = SimpleNamespace(
         carrier_pending=False, query_carrier=Mock(return_value="accepted")
     )
@@ -209,6 +211,8 @@ def test_enabling_requires_explicit_consent(tmp_path, monkeypatch, confirmed):
     AppKit.NSAlert.alloc.return_value.init.return_value = alert
     app.set_auto_query(True, "10001", "108")
     assert app._settings.auto_query_enabled == confirmed
+    assert app._settings.auto_data_enabled == confirmed
+    assert app._settings.auto_query_detect_carrier == confirmed
     assert app._settings_store.load().auto_query_enabled == confirmed
     assert app._maybe_auto_query.call_count == int(confirmed)
 
